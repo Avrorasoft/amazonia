@@ -513,27 +513,36 @@ $comentarios = $articulo['comentarios'] ?? [];
 
     // COMPARTIR ADJUNTANDO LA FOTOGRAFÍA FÍSICA + TÍTULO + RESUMEN + ENLACE
     async function compartirPaginaConFoto() {
-    const textoFormateado = `*${datosCompartir.titulo}*\n\n${datosCompartir.resumen}\n\n${datosCompartir.url}`;
+        const textoFormateado = `*${datosCompartir.titulo}*\n\n${datosCompartir.resumen}\n\n${datosCompartir.url}`;
 
-    if (navigator.share) {
-        try {
-            await navigator.share({
-                title: datosCompartir.titulo,
-                text: `*${datosCompartir.titulo}*\n\n${datosCompartir.resumen}`,
-                url: datosCompartir.url
+        if (navigator.share) {
+            try {
+                const archivoFoto = await obtenerArchivoDesdeHero();
+                if (archivoFoto && navigator.canShare && navigator.canShare({ files: [archivoFoto] })) {
+                    await navigator.share({
+                        files: [archivoFoto],
+                        title: datosCompartir.titulo,
+                        text: textoFormateado
+                    });
+                    return;
+                }
+                await navigator.share({
+                    title: datosCompartir.titulo,
+                    text: `${datosCompartir.titulo} — ${datosCompartir.resumen}`,
+                    url: datosCompartir.url
+                });
+                return;
+            } catch (err) {
+                if (err.name === 'AbortError') return;
+            }
+        }
+
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(textoFormateado).then(function() {
+                mostrarToast("📋 ¡Copiado con título, resumen y enlace!");
             });
-            return;
-        } catch (err) {
-            if (err.name === 'AbortError') return;
         }
     }
-
-    if (navigator.clipboard) {
-        navigator.clipboard.writeText(textoFormateado).then(function() {
-            mostrarToast("📋 ¡Copiado con título, resumen y enlace!");
-        });
-    }
-}
 </script>
 
 </body>
