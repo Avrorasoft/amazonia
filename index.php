@@ -1,836 +1,850 @@
 <?php
-// index.php - Portal Amazonía (Almacenamiento JSON Plano + Open Graph en Una Sola Tarjeta + Reacciones 0ms)
-session_start();
-
+// index.php - Portada con Mosaico Asimétrico de Espaciado Uniforme (Masonry), Categorías, Reacciones Instantáneas (0ms) y Compartido con Foto Real Adjunta
 $archivo_json = __DIR__ . '/articulos.json';
 $articulos = [];
 
 if (file_exists($archivo_json)) {
     $contenido = file_get_contents($archivo_json);
-    $articulos = json_decode($contenido, true);
-    if (!is_array($articulos)) {
-        $articulos = [];
-    }
+    $articulos = json_decode($contenido, true) ?: [];
 }
 
-// Endpoint asíncrono para guardar reacciones en tiempo real (0ms Optimistic UI en cliente)
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'reaccionar') {
-    header('Content-Type: application/json; charset=utf-8');
-    $id = isset($_POST['id']) ? trim($_POST['id']) : '';
-    $tipo = isset($_POST['tipo']) ? trim($_POST['tipo']) : '';
-    $delta = isset($_POST['delta']) ? (int)$_POST['delta'] : 1;
+// API AJAX para procesar reacciones con opción de cambio o anulación
+if (isset($_GET['ajax_reaccionar']) && isset($_GET['id']) && isset($_GET['tipo'])) {
+    header('Content-Type: application/json');
+    $tipo = $_GET['tipo']; // 'like' o 'sad'
+    $previo = $_GET['previo'] ?? ''; // 'like', 'sad' o ''
+    $id_art = $_GET['id'];
+    $encontrado = false;
+    $likes = 0;
+    $sads = 0;
+    $nuevo_estado = '';
 
-    $tipos_validos = ['like', 'love', 'haha', 'wow', 'sad', 'angry'];
-    if ($id !== '' && in_array($tipo, $tipos_validos, true)) {
-        foreach ($articulos as &$art) {
-            if ((string)$art['id'] === (string)$id) {
-                if (!isset($art['reacciones']) || !is_array($art['reacciones'])) {
-                    $art['reacciones'] = ['like' => 0, 'love' => 0, 'haha' => 0, 'wow' => 0, 'sad' => 0, 'angry' => 0];
+    foreach ($articulos as &$a) {
+        if (strval($a['id']) === strval($id_art)) {
+            if ($previo === $tipo) {
+                if ($tipo === 'like') {
+                    $a['likes'] = max(0, intval($a['likes'] ?? 0) - 1);
+                } elseif ($tipo === 'sad') {
+                    $a['sads'] = max(0, intval($a['sads'] ?? 0) - 1);
                 }
-                if (!isset($art['reacciones'][$tipo])) {
-                    $art['reacciones'][$tipo] = 0;
+                $nuevo_estado = '';
+            } else {
+                if ($previo === 'like') {
+                    $a['likes'] = max(0, intval($a['likes'] ?? 0) - 1);
+                } elseif ($previo === 'sad') {
+                    $a['sads'] = max(0, intval($a['sads'] ?? 0) - 1);
                 }
-                $art['reacciones'][$tipo] = max(0, (int)$art['reacciones'][$tipo] + $delta);
-                file_put_contents($archivo_json, json_encode($articulos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
-                echo json_encode(['ok' => true, 'reacciones' => $art['reacciones']]);
-                exit;
+
+                if ($tipo === 'like') {
+                    $a['likes'] = intval($a['likes'] ?? 0) + 1;
+                } elseif ($tipo === 'sad') {
+                    $a['sads'] = intval($a['sads'] ?? 0) + 1;
+                }
+                $nuevo_estado = $tipo;
             }
+            
+            $likes = intval($a['likes'] ?? 0);
+            $sads = intval($a['sads'] ?? 0);
+            $encontrado = true;
+            break;
         }
     }
-    echo json_encode(['ok' => false]);
+    unset($a);
+
+    if ($encontrado) {
+        file_put_contents($archivo_json, json_encode($articulos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        echo json_encode([
+            'status' => 'success', 
+            'likes' => $likes, 
+            'sads' => $sads, 
+            'nuevo_estado' => $nuevo_estado
+        ]);
+    } else {
+        echo json_encode(['status' => 'error']);
+    }
     exit;
 }
 
-// Ordenar artículos del más reciente al más antiguo
-usort($articulos, function ($a, $b) {
-    $fa = isset($a['fecha']) ? strtotime($a['fecha']) : 0;
-    $fb = isset($b['fecha']) ? strtotime($b['fecha']) : 0;
-    if ($fa === $fb) {
-        return strcmp((string)($b['id'] ?? ''), (string)($a['id'] ?? ''));
-    }
-    return $fb - $fa;
+// Filtrar artículos eliminados
+$articulos = array_filter($articulos, function($art) {
+    return !isset($art['eliminado']) || $art['eliminado'] !== true;
 });
 
-// Filtrado por categoría o búsqueda
-$categoria_actual = isset($_GET['categoria']) ? trim($_GET['categoria']) : '';
-$busqueda = isset($_GET['q']) ? trim($_GET['q']) : '';
-
-$articulos_filtrados = array_filter($articulos, function ($art) use ($categoria_actual, $busqueda) {
-    if ($categoria_actual !== '' && strcasecmp($art['categoria'] ?? '', $categoria_actual) !== 0) {
-        return false;
-    }
-    if ($busqueda !== '') {
-        $texto = mb_strtolower(($art['titulo'] ?? '') . ' ' . ($art['resumen'] ?? '') . ' ' . ($art['contenido'] ?? '') . ' ' . ($art['autor'] ?? ''), 'UTF-8');
-        if (mb_strpos($texto, mb_strtolower($busqueda, 'UTF-8')) === false) {
-            return false;
-        }
-    }
-    return true;
-});
-
-// Extraer categorías únicas
-$categorias = [];
+// Extraer categorías únicas y contar artículos por categoría
+$conteo_categorias = [];
 foreach ($articulos as $art) {
-    $cat = trim($art['categoria'] ?? '');
-    if ($cat !== '' && !in_array($cat, $categorias, true)) {
-        $categorias[] = $cat;
+    $cat = strtoupper(trim($art['categoria'] ?? 'NOTICIA'));
+    if ($cat === '') $cat = 'NOTICIA';
+    if (!isset($conteo_categorias[$cat])) {
+        $conteo_categorias[$cat] = 0;
     }
+    $conteo_categorias[$cat]++;
 }
-sort($categorias);
+ksort($conteo_categorias);
 
-// Construir URL base absoluta con HTTPS para Open Graph
-$protocolo = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') ? 'https://' : 'https://';
-$host = $_SERVER['HTTP_HOST'] ?? 'amazonia.alwaysdata.net';
-$ruta_base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\');
-$url_base = $protocolo . $host . ($ruta_base !== '' ? $ruta_base : '');
+// Detección estricta de protocolo y dominio actual para construir enlaces absolutos
+$es_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') 
+    || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443) 
+    || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
 
-function obtenerUrlImagenAbsoluta($img, $url_base) {
-    $img = trim((string)$img);
-    if ($img === '') {
-        return $url_base . '/images/logo_amazonia.png';
-    }
-    if (preg_match('/^https?:\/\//i', $img)) {
-        return $img;
-    }
-    return $url_base . '/' . ltrim($img, '/');
-}
-
-function formatearFechaEspanol($fecha_str) {
-    if (!$fecha_str) return '';
-    $ts = strtotime($fecha_str);
-    if (!$ts) return htmlspecialchars($fecha_str);
-    $meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-    $dia = date('d', $ts);
-    $mes = $meses[(int)date('n', $ts) - 1];
-    $anio = date('Y', $ts);
-    return "$dia $mes $anio";
-}
+$protocolo = $es_https ? "https://" : "http://";
+$host = $_SERVER['HTTP_HOST'] ?? 'localhost:8000';
+$base_dir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'])), '/');
+$url_base_portal = $protocolo . $host . ($base_dir !== '' ? $base_dir : '');
 ?>
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" prefix="og: https://ogp.me/ns#">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
-    <title>Portal Amazonía - Saberes, Cultura y Biodiversidad</title>
-    <meta name="description" content="Portal informativo y cultural de la Amazonía boliviana. Noticias, investigaciones, pueblos indígenas y biodiversidad.">
-
-    <!-- Open Graph / WhatsApp / Facebook en una sola tarjeta -->
-    <meta property="og:type" content="website">
+    <title>Portal Amazonía | Vanguardia y Territorio</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta property="og:site_name" content="Portal Amazonía">
-    <meta property="og:title" content="Portal Amazonía - Saberes, Cultura y Biodiversidad">
-    <meta property="og:description" content="Portal informativo y cultural de la Amazonía boliviana. Noticias, investigaciones, pueblos indígenas y biodiversidad.">
-    <meta property="og:url" content="<?php echo htmlspecialchars($url_base . '/index.php'); ?>">
-    <meta property="og:image" content="<?php echo htmlspecialchars($url_base . '/Mapa_indigena.jpg'); ?>">
-    <meta property="og:image:width" content="1200">
-    <meta property="og:image:height" content="630">
+    <meta property="og:title" content="Portal Amazonía | Vanguardia y Territorio">
+    <meta property="og:description" content="Periodismo e investigación desde la Amazonía boliviana.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="<?php echo htmlspecialchars($url_base_portal . '/index.php', ENT_QUOTES, 'UTF-8'); ?>">
+    <meta property="og:image" content="<?php echo htmlspecialchars($url_base_portal . '/images/default.jpg', ENT_QUOTES, 'UTF-8'); ?>">
     <meta name="twitter:card" content="summary_large_image">
-
     <style>
         :root {
-            --verde-oscuro: #0b2e1d;
-            --verde-selva: #145334;
-            --verde-vivo: #1f7a4c;
-            --dorado-sol: #e6a817;
-            --crema-fondo: #f4f6f0;
-            --blanco: #ffffff;
-            --texto-principal: #1e2923;
-            --texto-secundario: #4f6257;
-            --borde-suave: #dce3d8;
-            --sombra-tarjeta: 0 6px 18px rgba(11, 46, 29, 0.08);
+            --vibrant-green: #1D9A4C;
+            --accent-gold: #FFB81C;
+            --dark-bg: #121212;
+            --panel-bg: #1e1e1e;
+            --text-main: #E0E0E0;
+            --grid-gap: 25px;
         }
-
         * {
             box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--dark-bg);
+            color: var(--text-main);
             margin: 0;
             padding: 0;
-        }
-
-        body {
-            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--crema-fondo);
-            color: var(--texto-principal);
-            line-height: 1.55;
-            -webkit-font-smoothing: antialiased;
             overflow-x: hidden;
+            -webkit-text-size-adjust: 100%;
         }
-
-        /* Cabecera Superior */
-        .top-header {
-            background: linear-gradient(135deg, var(--verde-oscuro) 0%, var(--verde-selva) 100%);
-            color: var(--blanco);
-            padding: 16px 20px;
+        a, button {
+            touch-action: manipulation;
+        }
+        
+        /* CABECERA Y NAVEGACIÓN */
+        nav {
             position: sticky;
             top: 0;
+            background: rgba(10, 10, 10, 0.96);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
             z-index: 1000;
-            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+            border-bottom: 1px solid #2a2a2a;
         }
-
-        .header-inner {
-            max-width: 1280px;
-            margin: 0 auto;
+        .nav-top {
             display: flex;
-            flex-wrap: wrap;
             align-items: center;
             justify-content: space-between;
-            gap: 12px;
+            padding: 12px 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+            flex-wrap: wrap;
+            gap: 10px;
         }
-
-        .brand-box {
-            display: flex;
-            align-items: center;
-            gap: 12px;
+        .nav-brand {
+            color: white;
             text-decoration: none;
-            color: var(--blanco);
-        }
-
-        .brand-icon {
-            width: 42px;
-            height: 42px;
-            border-radius: 50%;
-            background: var(--dorado-sol);
-            color: var(--verde-oscuro);
+            font-weight: 900;
+            font-size: clamp(16px, 4vw, 20px);
+            letter-spacing: 1px;
             display: flex;
             align-items: center;
-            justify-content: center;
-            font-weight: 800;
-            font-size: 1.3rem;
-            flex-shrink: 0;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+            gap: 10px;
+            flex-wrap: wrap;
         }
-
-        .brand-titles h1 {
-            font-size: 1.35rem;
-            font-weight: 800;
-            letter-spacing: 0.3px;
-            line-height: 1.15;
+        .nav-brand span {
+            color: var(--accent-gold);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
         }
-
-        .brand-titles span {
-            font-size: 0.78rem;
-            color: #c9e2d3;
-            display: block;
-        }
-
         .nav-actions {
             display: flex;
             align-items: center;
             gap: 10px;
-            flex-wrap: wrap;
+        }
+        .btn-mapa-nav {
+            background: rgba(255, 184, 28, 0.12);
+            color: var(--accent-gold);
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: bold;
+            border: 1px solid var(--accent-gold);
+            padding: 7px 12px;
+            border-radius: 4px;
+            transition: 0.15s;
+        }
+        .btn-mapa-nav:hover {
+            background: var(--accent-gold);
+            color: black;
+        }
+        .btn-admin-nav {
+            color: var(--accent-gold);
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: bold;
+            border: 1px solid var(--accent-gold);
+            padding: 7px 14px;
+            border-radius: 4px;
+            transition: 0.15s;
+        }
+        .btn-admin-nav:hover {
+            background: var(--accent-gold);
+            color: black;
         }
 
-        .btn-mapa {
-            background-color: var(--dorado-sol);
-            color: var(--verde-oscuro);
-            text-decoration: none;
-            padding: 8px 15px;
-            border-radius: 999px;
-            font-weight: 700;
-            font-size: 0.88rem;
+        /* BARRA DE FILTRADO POR CATEGORÍAS */
+        .categorias-wrapper {
+            border-top: 1px solid #1f1f1f;
+            background: #0d0d0d;
+            padding: 10px 20px;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        .categorias-bar {
+            display: flex;
+            gap: 10px;
+            max-width: 1400px;
+            margin: 0 auto;
+            align-items: center;
+        }
+        .btn-cat {
+            background: #1a1a1a;
+            color: #bbb;
+            border: 1px solid #333;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.15s;
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            transition: transform 0.15s ease, background-color 0.15s ease;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+        .btn-cat span {
+            background: #2a2a2a;
+            color: #999;
+            padding: 1px 6px;
+            border-radius: 10px;
+            font-size: 10px;
+        }
+        .btn-cat:hover {
+            border-color: var(--accent-gold);
+            color: white;
+        }
+        .btn-cat.activo {
+            background: var(--accent-gold);
+            color: black;
+            border-color: var(--accent-gold);
+        }
+        .btn-cat.activo span {
+            background: rgba(0, 0, 0, 0.2);
+            color: black;
         }
 
-        .btn-mapa:hover {
-            background-color: #f4b623;
-            transform: translateY(-1px);
-        }
-
-        .btn-admin {
-            background-color: rgba(255, 255, 255, 0.14);
-            color: var(--blanco);
-            text-decoration: none;
-            padding: 8px 13px;
-            border-radius: 999px;
-            font-size: 0.82rem;
-            font-weight: 600;
-            transition: background-color 0.15s ease;
-        }
-
-        .btn-admin:hover {
-            background-color: rgba(255, 255, 255, 0.25);
-        }
-
-        /* Barra de búsqueda y filtros */
-        .filters-bar {
-            max-width: 1280px;
-            margin: 18px auto 10px;
-            padding: 0 16px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        .categories-scroll {
-            display: flex;
-            gap: 8px;
-            overflow-x: auto;
-            padding-bottom: 4px;
-            scrollbar-width: thin;
-            max-width: 100%;
-        }
-
-        .cat-chip {
-            text-decoration: none;
-            padding: 6px 14px;
-            border-radius: 999px;
-            font-size: 0.84rem;
-            font-weight: 600;
-            white-space: nowrap;
-            background-color: var(--blanco);
-            color: var(--verde-selva);
-            border: 1px solid var(--borde-suave);
-            transition: all 0.15s ease;
-        }
-
-        .cat-chip.active, .cat-chip:hover {
-            background-color: var(--verde-selva);
-            color: var(--blanco);
-            border-color: var(--verde-selva);
-        }
-
-        .search-form {
-            display: flex;
-            gap: 6px;
-            flex: 1 1 240px;
-            max-width: 360px;
-        }
-
-        .search-form input {
-            width: 100%;
-            padding: 8px 14px;
-            border-radius: 999px;
-            border: 1px solid var(--borde-suave);
-            font-size: 0.88rem;
-            outline: none;
-        }
-
-        .search-form button {
-            background-color: var(--verde-selva);
-            color: var(--blanco);
-            border: none;
-            padding: 8px 15px;
-            border-radius: 999px;
-            cursor: pointer;
-            font-weight: 600;
-            font-size: 0.85rem;
-        }
-
-        /* Contenedor Principal Masonry / Grid Responsivo */
-        .main-container {
-            max-width: 1280px;
-            margin: 12px auto 40px;
-            padding: 0 16px;
-        }
-
-        .masonry-grid {
+        /* CUADRÍCULA DE MOSAICO CON ESPACIADO UNIFORME EXACTO (25px) */
+        .mosaico-container {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
-            grid-auto-rows: 8px;
-            gap: 18px;
+            grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+            grid-auto-rows: 1px;
+            grid-auto-flow: dense;
+            column-gap: var(--grid-gap);
+            row-gap: 0px;
+            max-width: 1400px;
+            margin: 25px auto;
+            padding: 0 16px;
             align-items: start;
         }
 
-        /* En móviles compactos (ej. iPhone SE 320px-480px) usamos flujo natural de 1 columna sin bucle Masonry */
-        @media (max-width: 640px) {
-            .masonry-grid {
-                display: flex;
-                flex-direction: column;
-                gap: 16px;
-            }
-            .top-header {
-                padding: 12px 14px;
-            }
-            .brand-titles h1 {
-                font-size: 1.15rem;
-            }
-            .main-container {
-                padding: 0 12px;
-            }
-        }
-
-        .news-card {
-            background-color: var(--blanco);
-            border-radius: 14px;
-            overflow: hidden;
-            box-shadow: var(--sombra-tarjeta);
-            border: 1px solid var(--borde-suave);
+        .articulo-mosaico {
+            position: relative;
+            border-radius: 8px;
+            background: #111111;
+            border: 1px solid #2e2e2e;
+            padding: 20px;
             display: flex;
             flex-direction: column;
-            transition: transform 0.18s ease, box-shadow 0.18s ease;
+            gap: 15px;
+            box-sizing: border-box;
+            margin-bottom: var(--grid-gap);
+            transition: border-color 0.2s;
+        }
+        .articulo-mosaico:hover {
+            border-color: #444;
+        }
+        .articulo-mosaico.oculto {
+            display: none !important;
         }
 
-        .news-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 24px rgba(11, 46, 29, 0.13);
+        @media (max-width: 680px) {
+            .mosaico-container {
+                display: flex;
+                flex-direction: column;
+                gap: var(--grid-gap);
+            }
+            .articulo-mosaico {
+                margin-bottom: 0;
+                width: 100%;
+                padding: 16px;
+            }
         }
 
-        .card-image-link {
-            display: block;
-            position: relative;
+        /* CONTENEDOR DE IMAGEN Y AJUSTE DE RECORTE (OBJECT-FIT) */
+        .mosaico-img-container {
             width: 100%;
-            background-color: #e9efe6;
+            background: #080808;
+            border-radius: 6px;
             overflow: hidden;
+            aspect-ratio: 16 / 9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
         }
-
-        .card-image-link img {
+        .mosaico-img {
             width: 100%;
-            height: auto;
-            max-height: 360px;
+            height: 100%;
             object-fit: cover;
-            display: block;
+            object-position: center 20%;
             transition: transform 0.3s ease;
         }
-
-        .news-card:hover .card-image-link img {
-            transform: scale(1.02);
+        .articulo-mosaico:hover .mosaico-img {
+            transform: scale(1.03);
         }
 
-        .badge-categoria {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            background-color: rgba(11, 46, 29, 0.88);
-            color: var(--dorado-sol);
-            padding: 4px 11px;
-            border-radius: 999px;
-            font-size: 0.74rem;
-            font-weight: 700;
+        .contenido-columna {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .badge {
+            background: var(--accent-gold);
+            color: black;
+            font-weight: 900;
+            font-size: 10px;
+            padding: 4px 9px;
+            border-radius: 3px;
             text-transform: uppercase;
-            letter-spacing: 0.4px;
+            align-self: flex-start;
+            letter-spacing: 0.5px;
+        }
+        .fecha-tarjeta {
+            font-size: 11px;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: block;
+            margin-bottom: 5px;
+        }
+        .texto-container h3 {
+            margin: 4px 0 10px 0;
+            font-size: 18px;
+            color: white;
+            line-height: 1.3;
+        }
+        .texto-container p {
+            margin: 0;
+            font-size: 14px;
+            line-height: 1.6;
+            color: #ccc;
+            text-align: justify;
+            hyphens: auto;
+            -webkit-hyphens: auto;
         }
 
-        .card-body {
-            padding: 16px;
+        /* REGLAS DE FORMATOS ASIMÉTRICOS EN ESCRITORIO */
+        @media (min-width: 900px) {
+            .articulo-mosaico.span-h-izq {
+                grid-column: span 2;
+                display: grid;
+                grid-template-columns: 48% 1fr;
+                gap: 22px;
+                align-items: start;
+            }
+            .articulo-mosaico.span-h-izq .mosaico-img-container {
+                aspect-ratio: 16 / 10;
+                height: 100%;
+                min-height: 220px;
+            }
+
+            .articulo-mosaico.span-h-der {
+                grid-column: span 2;
+                display: grid;
+                grid-template-columns: 1fr 48%;
+                gap: 22px;
+                align-items: start;
+            }
+            .articulo-mosaico.span-h-der .mosaico-img-container {
+                order: 2;
+                aspect-ratio: 16 / 10;
+                height: 100%;
+                min-height: 220px;
+            }
+            .articulo-mosaico.span-h-der .contenido-columna {
+                order: 1;
+            }
+
+            .articulo-mosaico.span-v {
+                grid-column: span 1;
+            }
+            .articulo-mosaico.span-v .mosaico-img-container {
+                aspect-ratio: 4 / 3;
+            }
+            .articulo-mosaico.span-v .texto-container h3 {
+                font-size: 21px;
+            }
+
+            .articulo-mosaico.span-big {
+                grid-column: span 2;
+                border-color: rgba(255, 184, 28, 0.4);
+            }
+            .articulo-mosaico.span-big .mosaico-img-container {
+                aspect-ratio: 16 / 9;
+                max-height: 390px;
+            }
+            .articulo-mosaico.span-big .texto-container h3 {
+                font-size: 26px;
+                line-height: 1.25;
+            }
+            .articulo-mosaico.span-big .texto-container p {
+                font-size: 15.5px;
+            }
+        }
+
+        /* BOTONES DE ACCIÓN Y REACCIÓN PEGADOS AL TEXTO */
+        .tarjeta-footer {
+            margin-top: 12px;
             display: flex;
             flex-direction: column;
             gap: 10px;
+            padding-top: 14px;
+            border-top: 1px solid #222;
         }
-
-        .card-meta {
+        .acciones-fila {
             display: flex;
-            justify-content: space-between;
+            gap: 10px;
             align-items: center;
-            font-size: 0.78rem;
-            color: var(--texto-secundario);
-            gap: 8px;
-            flex-wrap: wrap;
         }
-
-        .card-title {
-            font-size: 1.15rem;
-            font-weight: 800;
-            line-height: 1.3;
-            color: var(--verde-oscuro);
+        .btn-leer {
+            padding: 10px 15px;
+            background: var(--accent-gold);
+            color: black;
+            border: none;
+            font-weight: 900;
+            font-size: 11px;
+            cursor: pointer;
+            border-radius: 4px;
+            text-transform: uppercase;
             text-decoration: none;
+            text-align: center;
+            flex-grow: 1;
+            transition: transform 0.1s, background 0.15s;
+        }
+        .btn-leer:active {
+            transform: scale(0.97);
+        }
+        .btn-leer:hover {
+            background: white;
+        }
+        .btn-compartir-tarjeta {
+            background: #222;
+            color: white;
+            border: 1px solid #444;
+            padding: 8px 14px;
+            border-radius: 4px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: transform 0.1s, background 0.15s;
+        }
+        .btn-compartir-tarjeta:active {
+            transform: scale(0.92);
+        }
+        .btn-compartir-tarjeta:hover {
+            background: var(--accent-gold);
+            color: black;
+            border-color: var(--accent-gold);
         }
 
-        .card-title:hover {
-            color: var(--verde-vivo);
-        }
-
-        /* Texto del resumen justificado con espaciado limpio */
-        .card-summary {
-            font-size: 0.93rem;
-            color: var(--texto-principal);
-            text-align: justify;
-            text-justify: inter-word;
-            hyphens: auto;
-            -webkit-hyphens: auto;
-            line-height: 1.55;
-            word-spacing: normal;
-        }
-
-        .card-footer {
-            padding: 12px 16px;
-            border-top: 1px solid var(--borde-suave);
-            background-color: #fafbf9;
+        .reacciones-bar {
             display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-            flex-wrap: wrap;
+            gap: 10px;
         }
-
-        /* Botones de reacción instantánea (0ms) */
-        .reactions-bar {
+        .btn-reaccion {
+            background: #1a1a1a;
+            border: 1px solid #3a3a3a;
+            color: #ccc;
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
             display: flex;
             align-items: center;
             gap: 6px;
-            flex-wrap: wrap;
-        }
-
-        .react-btn {
-            background: var(--blanco);
-            border: 1px solid var(--borde-suave);
-            border-radius: 999px;
-            padding: 5px 10px;
-            font-size: 0.82rem;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            color: var(--texto-principal);
-            font-weight: 600;
-            transition: transform 0.1s ease, background-color 0.15s ease, border-color 0.15s ease;
+            flex-grow: 1;
+            justify-content: center;
+            transition: transform 0.08s, background 0.12s, color 0.12s;
             user-select: none;
-            -webkit-tap-highlight-color: transparent;
+        }
+        .btn-reaccion:active {
+            transform: scale(0.93);
+        }
+        .btn-reaccion:hover {
+            border-color: var(--accent-gold);
+            color: white;
+            background: rgba(255, 184, 28, 0.1);
+        }
+        .btn-reaccion.seleccionado {
+            background: var(--accent-gold);
+            color: black;
+            border-color: var(--accent-gold);
         }
 
-        .react-btn:active {
-            transform: scale(1.18);
-        }
-
-        .react-btn.voted {
-            background-color: #e6f4ec;
-            border-color: var(--verde-vivo);
-            color: var(--verde-oscuro);
-        }
-
-        .card-actions-right {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-left: auto;
-        }
-
-        .btn-share-card {
-            background-color: #e8f0ec;
-            color: var(--verde-oscuro);
-            border: 1px solid #c8dbd0;
-            border-radius: 999px;
-            padding: 6px 12px;
-            font-size: 0.82rem;
-            font-weight: 700;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            transition: background-color 0.15s ease;
-        }
-
-        .btn-share-card:hover {
-            background-color: #d3e5dc;
-        }
-
-        .btn-leer-mas {
-            background-color: var(--verde-selva);
-            color: var(--blanco);
-            text-decoration: none;
-            padding: 6px 13px;
-            border-radius: 999px;
-            font-size: 0.82rem;
-            font-weight: 700;
-            transition: background-color 0.15s ease;
-        }
-
-        .btn-leer-mas:hover {
-            background-color: var(--verde-vivo);
-        }
-
-        .empty-state {
-            background: var(--blanco);
-            padding: 40px 20px;
-            border-radius: 14px;
-            text-align: center;
-            color: var(--texto-secundario);
-            border: 1px solid var(--borde-suave);
-        }
-
-        /* Toast de notificación al copiar enlace */
-        .toast-notif {
+        /* NOTIFICACIÓN FLOTANTE INSTANTÁNEA (TOAST SIN RETARDO) */
+        #toast-notificacion {
             position: fixed;
-            bottom: 22px;
+            bottom: 24px;
             left: 50%;
-            transform: translateX(-50%) translateY(80px);
-            background-color: var(--verde-oscuro);
-            color: var(--blanco);
-            padding: 10px 20px;
-            border-radius: 999px;
-            font-size: 0.88rem;
-            font-weight: 600;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.28);
-            transition: transform 0.25s ease, opacity 0.25s ease;
-            opacity: 0;
+            transform: translateX(-50%) translateY(100px);
+            background: var(--accent-gold);
+            color: #000;
+            font-weight: 800;
+            font-size: 13px;
+            padding: 12px 22px;
+            border-radius: 30px;
+            box-shadow: 0 8px 25px rgba(0,0,0,0.8);
             z-index: 9999;
+            opacity: 0;
             pointer-events: none;
+            transition: transform 0.22s ease, opacity 0.22s ease;
+            text-align: center;
+            max-width: 90vw;
         }
-
-        .toast-notif.visible {
+        #toast-notificacion.mostrar {
             transform: translateX(-50%) translateY(0);
             opacity: 1;
-        }
-
-        footer {
-            background-color: var(--verde-oscuro);
-            color: #c9e2d3;
-            text-align: center;
-            padding: 24px 16px;
-            font-size: 0.85rem;
-            margin-top: 40px;
         }
     </style>
 </head>
 <body>
 
-<header class="top-header">
-    <div class="header-inner">
-        <a href="index.php" class="brand-box">
-            <div class="brand-icon">A</div>
-            <div class="brand-titles">
-                <h1>PORTAL AMAZONÍA</h1>
-                <span>Saberes, Pueblos Indígenas y Biodiversidad</span>
-            </div>
+<nav>
+    <div class="nav-top">
+        <a href="index.php" class="nav-brand">
+            PORTAL AMAZONÍA <span>Vanguardia y Territorio</span>
         </a>
-        <nav class="nav-actions">
-            <a href="mapa.php" class="btn-mapa">🗺️ Mapa Indígena (36 Naciones)</a>
-            <a href="admin.php" class="btn-admin">⚙️ Panel CMS</a>
-        </nav>
-    </div>
-</header>
-
-<section class="filters-bar">
-    <div class="categories-scroll">
-        <a href="index.php" class="cat-chip <?php echo $categoria_actual === '' ? 'active' : ''; ?>">Todas</a>
-        <?php foreach ($categorias as $cat): ?>
-            <a href="index.php?categoria=<?php echo urlencode($cat); ?>"
-               class="cat-chip <?php echo strcasecmp($categoria_actual, $cat) === 0 ? 'active' : ''; ?>">
-                <?php echo htmlspecialchars($cat); ?>
-            </a>
-        <?php endforeach; ?>
-    </div>
-
-    <form class="search-form" method="GET" action="index.php">
-        <?php if ($categoria_actual !== ''): ?>
-            <input type="hidden" name="categoria" value="<?php echo htmlspecialchars($categoria_actual); ?>">
-        <?php endif; ?>
-        <input type="text" name="q" placeholder="Buscar artículo o pueblo..." value="<?php echo htmlspecialchars($busqueda); ?>">
-        <button type="submit">Buscar</button>
-    </form>
-</section>
-
-<main class="main-container">
-    <?php if (empty($articulos_filtrados)): ?>
-        <div class="empty-state">
-            <h3>No se encontraron artículos</h3>
-            <p style="margin-top: 8px;">Prueba con otra categoría o término de búsqueda.</p>
+        <div class="nav-actions">
+            <a href="mapa.php" class="btn-mapa-nav">🗺️ Mapa Indígena</a>
+            <a href="admin.php" class="btn-admin-nav">CMS Admin</a>
         </div>
-    <?php else: ?>
-        <div class="masonry-grid" id="masonryGrid">
-            <?php foreach ($articulos_filtrados as $art):
-                $id = (string)($art['id'] ?? '');
-                $titulo = trim($art['titulo'] ?? 'Sin título');
-                $categoria = trim($art['categoria'] ?? 'Amazonía');
-                $autor = trim($art['autor'] ?? 'Redacción Amazonía');
-                $fecha_fmt = formatearFechaEspanol($art['fecha'] ?? '');
-                $imagen_rel = trim($art['imagen'] ?? '');
-                $imagen_abs = obtenerUrlImagenAbsoluta($imagen_rel, $url_base);
+    </div>
 
-                // Resumen limpio
-                $resumen_raw = trim($art['resumen'] ?? '');
-                if ($resumen_raw === '') {
-                    $resumen_raw = mb_substr(strip_tags($art['contenido'] ?? ''), 0, 220, 'UTF-8') . '...';
-                }
-
-                $url_articulo = $url_base . '/articulo.php?id=' . urlencode($id);
-
-                $reacciones = isset($art['reacciones']) && is_array($art['reacciones']) ? $art['reacciones'] : [];
-                $c_like = (int)($reacciones['like'] ?? 0);
-                $c_love = (int)($reacciones['love'] ?? 0);
-                $c_wow  = (int)($reacciones['wow'] ?? 0);
-                $c_sad  = (int)($reacciones['sad'] ?? 0);
-            ?>
-                <article class="news-card" data-id="<?php echo htmlspecialchars($id); ?>">
-                    <?php if ($imagen_rel !== ''): ?>
-                        <a href="articulo.php?id=<?php echo urlencode($id); ?>" class="card-image-link">
-                            <span class="badge-categoria"><?php echo htmlspecialchars($categoria); ?></span>
-                            <img src="<?php echo htmlspecialchars($imagen_rel); ?>"
-                                 alt="<?php echo htmlspecialchars($titulo); ?>"
-                                 loading="lazy"
-                                 onload="ajustarTarjetaMasonry(this.closest('.news-card'))">
-                        </a>
-                    <?php endif; ?>
-
-                    <div class="card-body">
-                        <div class="card-meta">
-                            <span>✍️ <?php echo htmlspecialchars($autor); ?></span>
-                            <?php if ($fecha_fmt !== ''): ?>
-                                <span>📅 <?php echo $fecha_fmt; ?></span>
-                            <?php endif; ?>
-                        </div>
-
-                        <a href="articulo.php?id=<?php echo urlencode($id); ?>" class="card-title">
-                            <?php echo htmlspecialchars($titulo); ?>
-                        </a>
-
-                        <p class="card-summary"><?php echo nl2br(htmlspecialchars($resumen_raw)); ?></p>
-                    </div>
-
-                    <div class="card-footer">
-                        <div class="reactions-bar">
-                            <button type="button" class="react-btn" data-id="<?php echo htmlspecialchars($id); ?>" data-tipo="like" onclick="reaccionarInstantaneo(this)">
-                                👍 <span class="count"><?php echo $c_like; ?></span>
-                            </button>
-                            <button type="button" class="react-btn" data-id="<?php echo htmlspecialchars($id); ?>" data-tipo="love" onclick="reaccionarInstantaneo(this)">
-                                ❤️ <span class="count"><?php echo $c_love; ?></span>
-                            </button>
-                            <button type="button" class="react-btn" data-id="<?php echo htmlspecialchars($id); ?>" data-tipo="wow" onclick="reaccionarInstantaneo(this)">
-                                😮 <span class="count"><?php echo $c_wow; ?></span>
-                            </button>
-                            <button type="button" class="react-btn" data-id="<?php echo htmlspecialchars($id); ?>" data-tipo="sad" onclick="reaccionarInstantaneo(this)">
-                                😢 <span class="count"><?php echo $c_sad; ?></span>
-                            </button>
-                        </div>
-
-                        <div class="card-actions-right">
-                            <button type="button"
-                                    class="btn-share-card"
-                                    data-titulo="<?php echo htmlspecialchars($titulo, ENT_QUOTES); ?>"
-                                    data-resumen="<?php echo htmlspecialchars(mb_substr($resumen_raw, 0, 150, 'UTF-8'), ENT_QUOTES); ?>"
-                                    data-url="<?php echo htmlspecialchars($url_articulo, ENT_QUOTES); ?>"
-                                    data-imagen="<?php echo htmlspecialchars($imagen_abs, ENT_QUOTES); ?>"
-                                    onclick="compartirConFotoReal(this)">
-                                🔗 Compartir
-                            </button>
-                            <a href="articulo.php?id=<?php echo urlencode($id); ?>" class="btn-leer-mas">Leer →</a>
-                        </div>
-                    </div>
-                </article>
+    <?php if (!empty($conteo_categorias)): ?>
+    <div class="categorias-wrapper">
+        <div class="categorias-bar">
+            <button class="btn-cat activo" onclick="filtrarCategoria('TODAS', this)">
+                Todas <span><?php echo count($articulos); ?></span>
+            </button>
+            <?php foreach ($conteo_categorias as $cat_nombre => $cantidad): ?>
+                <button class="btn-cat" onclick="filtrarCategoria('<?php echo htmlspecialchars($cat_nombre, ENT_QUOTES, 'UTF-8'); ?>', this)">
+                    <?php echo htmlspecialchars($cat_nombre, ENT_QUOTES, 'UTF-8'); ?>
+                    <span><?php echo $cantidad; ?></span>
+                </button>
             <?php endforeach; ?>
         </div>
+    </div>
     <?php endif; ?>
-</main>
+</nav>
 
-<div id="toastNotif" class="toast-notif">Enlace copiado al portapapeles</div>
+<div class="mosaico-container" id="contenedorMosaico">
+    <?php if (empty($articulos)): ?>
+        <p style="text-align: center; color: #888; grid-column: 1 / -1;">No hay artículos publicados todavía. Utiliza <a href="admin.php" style="color:var(--accent-gold);">el panel CMS</a> para crear el primero.</p>
+    <?php else: ?>
+        <?php foreach ($articulos as $art): 
+            $id = $art['id'] ?? '';
+            $titulo_raw = trim($art['titulo'] ?? 'Sin título');
+            $resumen_raw = trim($art['resumen'] ?? '');
+            $titulo = htmlspecialchars($titulo_raw, ENT_QUOTES, 'UTF-8');
+            $resumen = htmlspecialchars($resumen_raw, ENT_QUOTES, 'UTF-8');
+            $categoriaRaw = strtoupper(trim($art['categoria'] ?? 'NOTICIA'));
+            if ($categoriaRaw === '') $categoriaRaw = 'NOTICIA';
+            $categoria = htmlspecialchars($categoriaRaw, ENT_QUOTES, 'UTF-8');
+            $fecha = htmlspecialchars($art['fecha'] ?? '', ENT_QUOTES, 'UTF-8');
+            $fuente = htmlspecialchars($art['fuente'] ?? '', ENT_QUOTES, 'UTF-8');
+            $formato = htmlspecialchars($art['formato'] ?? '', ENT_QUOTES, 'UTF-8');
+            
+            $img_path = trim($art['imagen'] ?? '');
+            if ($img_path !== '' && file_exists(__DIR__ . '/' . $img_path)) {
+                $imagen = htmlspecialchars($img_path, ENT_QUOTES, 'UTF-8');
+            } else {
+                $imagen = 'images/default.jpg';
+            }
 
-<footer>
-    <p>&copy; <?php echo date('Y'); ?> Portal Amazonía — Cultura, Territorio y Biodiversidad Amazónica</p>
-</footer>
+            $likes = intval($art['likes'] ?? 0);
+            $sads = intval($art['sads'] ?? 0);
+            $url_articulo = $url_base_portal . "/articulo.php?id=" . rawurlencode($id);
+        ?>
+            <article class="articulo-mosaico <?php echo $formato; ?>" data-categoria="<?php echo $categoria; ?>">
+                <div class="mosaico-img-container">
+                    <img src="<?php echo $imagen; ?>" id="img-art-<?php echo htmlspecialchars($id, ENT_QUOTES, 'UTF-8'); ?>" class="mosaico-img" alt="<?php echo $titulo; ?>" decoding="async" onload="ajustarMosaico()" onerror="this.onerror=null; this.src='images/default.jpg'; ajustarMosaico();">
+                </div>
+
+                <div class="contenido-columna">
+                    <span class="badge"><?php echo $categoria; ?></span>
+                    <div class="texto-container">
+                        <span class="fecha-tarjeta"><?php echo $fecha; ?><?php echo $fuente ? " | $fuente" : ""; ?></span>
+                        <h3><?php echo $titulo; ?></h3>
+                        <p><?php echo $resumen; ?></p>
+                    </div>
+                    <div class="tarjeta-footer">
+                        <div class="acciones-fila">
+                            <a href="articulo.php?id=<?php echo rawurlencode($id); ?>" class="btn-leer">Leer Artículo (Inmersión)</a>
+                            <button class="btn-compartir-tarjeta" 
+                                    data-id="<?php echo htmlspecialchars($id, ENT_QUOTES, 'UTF-8'); ?>"
+                                    data-url="<?php echo htmlspecialchars($url_articulo, ENT_QUOTES, 'UTF-8'); ?>"
+                                    data-titulo="<?php echo $titulo; ?>"
+                                    data-resumen="<?php echo htmlspecialchars(mb_substr($resumen_raw, 0, 220), ENT_QUOTES, 'UTF-8'); ?>"
+                                    onclick="compartirConFotoReal(this)" 
+                                    title="Compartir con foto adjunta, resumen y enlace">🔗</button>
+                        </div>
+                        <div class="reacciones-bar">
+                            <button class="btn-reaccion" id="btn-like-<?php echo $id; ?>" onclick="reaccionar('<?php echo $id; ?>', 'like')">👍 <span id="likes-<?php echo $id; ?>"><?php echo $likes; ?></span></button>
+                            <button class="btn-reaccion" id="btn-sad-<?php echo $id; ?>" onclick="reaccionar('<?php echo $id; ?>', 'sad')">😢 <span id="sads-<?php echo $id; ?>"><?php echo $sads; ?></span></button>
+                        </div>
+                    </div>
+                </div>
+            </article>
+        <?php endforeach; ?>
+    <?php endif; ?>
+</div>
+
+<div id="toast-notificacion"></div>
 
 <script>
-// 1. Motor Masonry protegido contra bucles en pantallas móviles (iPhone SE <= 640px)
-function ajustarTarjetaMasonry(card) {
-    if (!card || window.innerWidth <= 640) {
-        if (card) card.style.gridRowEnd = 'auto';
-        return;
-    }
-    const grid = document.getElementById('masonryGrid');
-    if (!grid) return;
-    const rowHeight = 8;
-    const rowGap = 18;
-    const contentHeight = card.getBoundingClientRect().height;
-    const rowSpan = Math.ceil((contentHeight + rowGap) / (rowHeight + rowGap));
-    card.style.gridRowEnd = 'span ' + rowSpan;
-}
-
-function recalcularTodoMasonry() {
-    const cards = document.querySelectorAll('.news-card');
-    if (window.innerWidth <= 640) {
-        cards.forEach(c => c.style.gridRowEnd = 'auto');
-        return;
-    }
-    cards.forEach(c => ajustarTarjetaMasonry(c));
-}
-
-window.addEventListener('load', recalcularTodoMasonry);
-let resizeTimer = null;
-window.addEventListener('resize', function() {
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(recalcularTodoMasonry, 120);
-});
-
-// 2. Reacciones Instantáneas en 0 ms (Optimistic UI + persistencia en localStorage y servidor)
-document.addEventListener('DOMContentLoaded', function() {
-    document.querySelectorAll('.react-btn').forEach(btn => {
-        const id = btn.getAttribute('data-id');
-        const tipo = btn.getAttribute('data-tipo');
-        const key = 'reaccion_' + id + '_' + tipo;
-        if (localStorage.getItem(key) === '1') {
-            btn.classList.add('voted');
-        }
-    });
-});
-
-function reaccionarInstantaneo(btn) {
-    const id = btn.getAttribute('data-id');
-    const tipo = btn.getAttribute('data-tipo');
-    const countSpan = btn.querySelector('.count');
-    if (!id || !tipo || !countSpan) return;
-
-    const key = 'reaccion_' + id + '_' + tipo;
-    const yaVoto = localStorage.getItem(key) === '1';
-    const delta = yaVoto ? -1 : 1;
-
-    // Cambio visual en 0 milisegundos
-    let actual = parseInt(countSpan.textContent, 10) || 0;
-    let nuevo = Math.max(0, actual + delta);
-    countSpan.textContent = nuevo;
-
-    if (yaVoto) {
-        localStorage.removeItem(key);
-        btn.classList.remove('voted');
-    } else {
-        localStorage.setItem(key, '1');
-        btn.classList.add('voted');
+    let toastTimer = null;
+    function mostrarToast(mensaje) {
+        const toast = document.getElementById('toast-notificacion');
+        toast.textContent = mensaje;
+        toast.classList.add('mostrar');
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+            toast.classList.remove('mostrar');
+        }, 2800);
     }
 
-    // Envío asíncrono en segundo plano sin bloquear la interfaz
-    const formData = new FormData();
-    formData.append('accion', 'reaccionar');
-    formData.append('id', id);
-    formData.append('tipo', tipo);
-    formData.append('delta', delta);
-
-    fetch('index.php', {
-        method: 'POST',
-        body: formData
-    }).catch(() => {});
-}
-
-// 3. Compartir en UNA SOLA TARJETA unificada (Open Graph nativo con foto + título + resumen + enlace)
-function mostrarToast(mensaje) {
-    const toast = document.getElementById('toastNotif');
-    if (!toast) return;
-    toast.textContent = mensaje;
-    toast.classList.add('visible');
-    setTimeout(() => toast.classList.remove('visible'), 2600);
-}
-
-async function compartirConFotoReal(btn) {
-    const titulo = btn.getAttribute('data-titulo') || 'Portal Amazonía';
-    const resumen = btn.getAttribute('data-resumen') || '';
-    const url = btn.getAttribute('data-url') || window.location.href;
-
-    // Se envía texto y URL sin archivo binario suelto para que WhatsApp arme UNA SOLA TARJETA con la foto Open Graph
-    const textoCompartir = `*${titulo}*\n\n${resumen}`;
-
-    if (navigator.share) {
-        try {
-            await navigator.share({
-                title: titulo,
-                text: textoCompartir,
-                url: url
-            });
+    // Motor Masonry blindado contra bucles en iPhone SE
+    let rafMosaico = null;
+    function ajustarTarjeta(tarjeta) {
+        if (window.innerWidth <= 680 || tarjeta.classList.contains('oculto')) {
+            if (tarjeta.style.gridRowEnd !== 'auto') {
+                tarjeta.style.gridRowEnd = 'auto';
+            }
             return;
-        } catch (err) {
-            if (err && err.name === 'AbortError') return;
+        }
+        const gapVertical = 25;
+        const alturaContenido = tarjeta.getBoundingClientRect().height;
+        const filasTotales = Math.ceil(alturaContenido + gapVertical);
+        const nuevoValor = `span ${filasTotales}`;
+        if (tarjeta.style.gridRowEnd !== nuevoValor) {
+            tarjeta.style.gridRowEnd = nuevoValor;
         }
     }
 
-    // Respaldo directo a WhatsApp o portapapeles en escritorio
-    const textoCompleto = `*${titulo}*\n\n${resumen}\n\n${url}`;
-    if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
-        window.open('https://api.whatsapp.com/send?text=' + encodeURIComponent(textoCompleto), '_blank');
-    } else if (navigator.clipboard) {
-        navigator.clipboard.writeText(textoCompleto).then(() => {
-            mostrarToast('Artículo y enlace copiados para compartir');
+    function ajustarMosaico() {
+        if (rafMosaico) cancelAnimationFrame(rafMosaico);
+        rafMosaico = requestAnimationFrame(() => {
+            const tarjetas = document.querySelectorAll('.articulo-mosaico');
+            tarjetas.forEach(t => ajustarTarjeta(t));
         });
     }
-}
+
+    document.addEventListener("DOMContentLoaded", function() {
+        <?php foreach ($articulos as $art): ?>
+            (function() {
+                let idArt = <?php echo json_encode(strval($art['id'])); ?>;
+                let estado = localStorage.getItem('reaccion_' + idArt);
+                if (estado) {
+                    let btn = document.getElementById('btn-' + estado + '-' + idArt);
+                    if (btn) btn.classList.add('seleccionado');
+                }
+            })();
+        <?php endforeach; ?>
+
+        ajustarMosaico();
+
+        if ('ResizeObserver' in window) {
+            const observer = new ResizeObserver(entries => {
+                if (window.innerWidth <= 680) return;
+                requestAnimationFrame(() => {
+                    entries.forEach(entry => ajustarTarjeta(entry.target));
+                });
+            });
+            document.querySelectorAll('.articulo-mosaico').forEach(t => observer.observe(t));
+        }
+    });
+
+    window.addEventListener('load', ajustarMosaico);
+    window.addEventListener('resize', ajustarMosaico);
+
+    function filtrarCategoria(categoriaElegida, btnClickeado) {
+        const botones = document.querySelectorAll('.btn-cat');
+        botones.forEach(b => b.classList.remove('activo'));
+        btnClickeado.classList.add('activo');
+
+        const tarjetas = document.querySelectorAll('.articulo-mosaico');
+        tarjetas.forEach(tarjeta => {
+            const catTarjeta = tarjeta.getAttribute('data-categoria');
+            if (categoriaElegida === 'TODAS' || catTarjeta === categoriaElegida) {
+                tarjeta.classList.remove('oculto');
+            } else {
+                tarjeta.classList.add('oculto');
+            }
+        });
+        ajustarMosaico();
+    }
+
+    // REACCIONES INSTANTÁNEAS EN 0 MILISEGUNDOS (OPTIMISTIC UI)
+    function reaccionar(id, tipo) {
+        const claveLocal = `reaccion_${id}`;
+        const previo = localStorage.getItem(claveLocal) || '';
+
+        const spanLikes = document.getElementById(`likes-${id}`);
+        const spanSads = document.getElementById(`sads-${id}`);
+        const btnLike = document.getElementById(`btn-like-${id}`);
+        const btnSad = document.getElementById(`btn-sad-${id}`);
+
+        let likesActuales = parseInt(spanLikes.textContent, 10) || 0;
+        let sadsActuales = parseInt(spanSads.textContent, 10) || 0;
+        let nuevoEstado = '';
+
+        // 1. Actualizar pantalla en 0ms sin esperar al servidor
+        if (previo === tipo) {
+            if (tipo === 'like') likesActuales = Math.max(0, likesActuales - 1);
+            if (tipo === 'sad') sadsActuales = Math.max(0, sadsActuales - 1);
+            nuevoEstado = '';
+        } else {
+            if (previo === 'like') likesActuales = Math.max(0, likesActuales - 1);
+            if (previo === 'sad') sadsActuales = Math.max(0, sadsActuales - 1);
+            if (tipo === 'like') likesActuales++;
+            if (tipo === 'sad') sadsActuales++;
+            nuevoEstado = tipo;
+        }
+
+        spanLikes.textContent = likesActuales;
+        spanSads.textContent = sadsActuales;
+        if (btnLike) btnLike.classList.remove('seleccionado');
+        if (btnSad) btnSad.classList.remove('seleccionado');
+
+        if (nuevoEstado !== '') {
+            const btnActivo = document.getElementById(`btn-${nuevoEstado}-${id}`);
+            if (btnActivo) btnActivo.classList.add('seleccionado');
+            localStorage.setItem(claveLocal, nuevoEstado);
+        } else {
+            localStorage.removeItem(claveLocal);
+        }
+
+        // 2. Guardar silenciosamente en segundo plano
+        fetch(`index.php?ajax_reaccionar=1&id=${encodeURIComponent(id)}&tipo=${encodeURIComponent(tipo)}&previo=${encodeURIComponent(previo)}`, {
+            cache: 'no-store'
+        }).catch(() => {});
+    }
+
+    // Convierte la imagen ya cargada en el DOM a un archivo JPG comprimido en milisegundos
+    function obtenerArchivoDesdeImgDOM(imgElement) {
+        return new Promise((resolve) => {
+            try {
+                if (!imgElement || !imgElement.complete || imgElement.naturalWidth === 0) {
+                    resolve(null);
+                    return;
+                }
+                const canvas = document.createElement('canvas');
+                const maxDim = 1200;
+                let w = imgElement.naturalWidth;
+                let h = imgElement.naturalHeight;
+                if (w > maxDim || h > maxDim) {
+                    if (w > h) {
+                        h = Math.round((h * maxDim) / w);
+                        w = maxDim;
+                    } else {
+                        w = Math.round((w * maxDim) / h);
+                        h = maxDim;
+                    }
+                }
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(imgElement, 0, 0, w, h);
+                canvas.toBlob((blob) => {
+                    if (blob) {
+                        const archivo = new File([blob], 'noticia_amazonia.jpg', { type: 'image/jpeg' });
+                        resolve(archivo);
+                    } else {
+                        resolve(null);
+                    }
+                }, 'image/jpeg', 0.85);
+            } catch (e) {
+                resolve(null);
+            }
+        });
+    }
+
+    // COMPARTIR CON FOTO FÍSICA ADJUNTA + TÍTULO + RESUMEN + ENLACE (IGUAL QUE PORTAL-IA-WEB.WEB.APP)
+    async function compartirConFotoReal(btn) {
+        const id = btn.getAttribute('data-id');
+        const url = btn.getAttribute('data-url');
+        const titulo = btn.getAttribute('data-titulo');
+        const resumen = btn.getAttribute('data-resumen');
+        const textoFormateado = `*${titulo}*\n\n${resumen}\n\n${url}`;
+
+        const imgEl = document.getElementById(`img-art-${id}`);
+
+        if (navigator.share) {
+            try {
+                const archivoFoto = await obtenerArchivoDesdeImgDOM(imgEl);
+                if (archivoFoto && navigator.canShare && navigator.canShare({ files: [archivoFoto] })) {
+                    await navigator.share({
+                        files: [archivoFoto],
+                        title: titulo,
+                        text: textoFormateado
+                    });
+                    return;
+                }
+                // Si el dispositivo no soporta archivos adjuntos, comparte texto + enlace
+                await navigator.share({
+                    title: titulo,
+                    text: `${titulo} — ${resumen}`,
+                    url: url
+                });
+                return;
+            } catch (err) {
+                if (err.name === 'AbortError') return;
+            }
+        }
+
+        // Respaldo instantáneo en portapapeles para PC de escritorio
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(textoFormateado).then(() => {
+                mostrarToast("📋 ¡Copiado con título, resumen y enlace!");
+            });
+        }
+    }
 </script>
+
 </body>
 </html>
