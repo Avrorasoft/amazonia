@@ -1,549 +1,702 @@
 <?php
-// articulo.php - Inmersión Total con Envío de Fotografía Adjunta Real en Redes Sociales, Reacciones Instantáneas (0ms), Audio, Pin y Comentarios
-$id = isset($_GET['id']) ? $_GET['id'] : '';
+// articulo.php - Vista completa del artículo + Open Graph en Una Sola Tarjeta + Audio TTS + Reacciones 0ms + Comentarios
+session_start();
 
 $archivo_json = __DIR__ . '/articulos.json';
 $articulos = [];
 
 if (file_exists($archivo_json)) {
     $contenido = file_get_contents($archivo_json);
-    $articulos = json_decode($contenido, true) ?: [];
+    $articulos = json_decode($contenido, true);
+    if (!is_array($articulos)) {
+        $articulos = [];
+    }
 }
 
-// API AJAX interna para procesar reacciones sin recargar en la inmersión total
-if (isset($_GET['ajax_reaccionar']) && isset($_GET['id']) && isset($_GET['tipo'])) {
-    header('Content-Type: application/json');
-    $tipo = $_GET['tipo']; // 'like' o 'sad'
-    $previo = $_GET['previo'] ?? ''; 
-    $id_art = $_GET['id'];
-    $encontrado = false;
-    $likes = 0;
-    $sads = 0;
-    $nuevo_estado = '';
+$id_actual = isset($_GET['id']) ? trim($_GET['id']) : (isset($_POST['id']) ? trim($_POST['id']) : '');
 
-    foreach ($articulos as &$a) {
-        if (strval($a['id']) === strval($id_art)) {
-            if ($previo === $tipo) {
-                if ($tipo === 'like') {
-                    $a['likes'] = max(0, intval($a['likes'] ?? 0) - 1);
-                } elseif ($tipo === 'sad') {
-                    $a['sads'] = max(0, intval($a['sads'] ?? 0) - 1);
+// Endpoint asíncrono para reacciones en 0ms desde articulo.php
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'reaccionar') {
+    header('Content-Type: application/json; charset=utf-8');
+    $id = isset($_POST['id']) ? trim($_POST['id']) : '';
+    $tipo = isset($_POST['tipo']) ? trim($_POST['tipo']) : '';
+    $delta = isset($_POST['delta']) ? (int)$_POST['delta'] : 1;
+
+    $tipos_validos = ['like', 'love', 'haha', 'wow', 'sad', 'angry'];
+    if ($id !== '' && in_array($tipo, $tipos_validos, true)) {
+        foreach ($articulos as &$art) {
+            if ((string)$art['id'] === (string)$id) {
+                if (!isset($art['reacciones']) || !is_array($art['reacciones'])) {
+                    $art['reacciones'] = ['like' => 0, 'love' => 0, 'haha' => 0, 'wow' => 0, 'sad' => 0, 'angry' => 0];
                 }
-                $nuevo_estado = '';
-            } else {
-                if ($previo === 'like') {
-                    $a['likes'] = max(0, intval($a['likes'] ?? 0) - 1);
-                } elseif ($previo === 'sad') {
-                    $a['sads'] = max(0, intval($a['sads'] ?? 0) - 1);
+                if (!isset($art['reacciones'][$tipo])) {
+                    $art['reacciones'][$tipo] = 0;
                 }
-                if ($tipo === 'like') {
-                    $a['likes'] = intval($a['likes'] ?? 0) + 1;
-                } elseif ($tipo === 'sad') {
-                    $a['sads'] = intval($a['sads'] ?? 0) + 1;
-                }
-                $nuevo_estado = $tipo;
+                $art['reacciones'][$tipo] = max(0, (int)$art['reacciones'][$tipo] + $delta);
+                file_put_contents($archivo_json, json_encode($articulos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+                echo json_encode(['ok' => true, 'reacciones' => $art['reacciones']]);
+                exit;
             }
-            
-            $likes = intval($a['likes'] ?? 0);
-            $sads = intval($a['sads'] ?? 0);
-            $encontrado = true;
-            break;
         }
     }
-    unset($a);
-
-    if ($encontrado) {
-        file_put_contents($archivo_json, json_encode($articulos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-        echo json_encode([
-            'status' => 'success', 
-            'likes' => $likes, 
-            'sads' => $sads, 
-            'nuevo_estado' => $nuevo_estado
-        ]);
-    } else {
-        echo json_encode(['status' => 'error']);
-    }
+    echo json_encode(['ok' => false]);
     exit;
 }
 
-// Manejo de envío de comentarios locales por POST
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nuevo_comentario'])) {
-    $autor_comentario = trim($_POST['autor'] ?? 'Anónimo');
-    $texto_comentario = trim($_POST['comentario'] ?? '');
+// Guardar nuevo comentario
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['accion']) && $_POST['accion'] === 'comentar') {
+    $autor_com = trim($_POST['nombre'] ?? 'Lector Amazónico');
+    $texto_com = trim($_POST['comentario'] ?? '');
+    if ($autor_com === '') $autor_com = 'Lector Amazónico';
 
-    if ($texto_comentario !== '') {
+    if ($id_actual !== '' && $texto_com !== '') {
         foreach ($articulos as &$art) {
-            if (strval($art['id']) === strval($id)) {
-                if (!isset($art['comentarios'])) {
+            if ((string)$art['id'] === (string)$id_actual) {
+                if (!isset($art['comentarios']) || !is_array($art['comentarios'])) {
                     $art['comentarios'] = [];
                 }
-                array_unshift($art['comentarios'], [
-                    'autor' => ($autor_comentario !== '' ? $autor_comentario : 'Anónimo'),
-                    'fecha' => date('Y-m-d H:i'),
-                    'texto' => $texto_comentario
-                ]);
+                $art['comentarios'][] = [
+                    'nombre' => mb_substr($autor_com, 0, 60, 'UTF-8'),
+                    'texto'  => mb_substr($texto_com, 0, 1000, 'UTF-8'),
+                    'fecha'  => date('Y-m-d H:i')
+                ];
+                file_put_contents($archivo_json, json_encode($articulos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
                 break;
             }
         }
-        unset($art);
-        file_put_contents($archivo_json, json_encode($articulos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-        header("Location: articulo.php?id=" . urlencode($id));
+        header('Location: articulo.php?id=' . urlencode($id_actual) . '#comentarios');
         exit;
     }
 }
 
+// Localizar artículo solicitado
 $articulo = null;
 foreach ($articulos as $art) {
-    if (strval($art['id']) === strval($id)) {
+    if ((string)($art['id'] ?? '') === (string)$id_actual) {
         $articulo = $art;
         break;
     }
 }
 
-if (!$articulo || (isset($articulo['eliminado']) && $articulo['eliminado'] === true)) {
-    header("Location: index.php");
-    exit;
+if (!$articulo && !empty($articulos)) {
+    $articulo = $articulos[0];
+    $id_actual = (string)$articulo['id'];
 }
 
-// Datos limpios del artículo
-$titulo_raw = trim($articulo['titulo'] ?? 'Artículo');
-$resumen_raw = trim($articulo['resumen'] ?? '');
-if ($resumen_raw === '') {
-    $resumen_raw = mb_substr(strip_tags($articulo['contenido_completo'] ?? ''), 0, 200) . '...';
-}
+// Construir URL base con HTTPS para Open Graph
+$host = $_SERVER['HTTP_HOST'] ?? 'amazonia.alwaysdata.net';
+$ruta_base = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\');
+$url_base = 'https://' . $host . ($ruta_base !== '' ? $ruta_base : '');
 
-$titulo = htmlspecialchars($titulo_raw, ENT_QUOTES, 'UTF-8');
-$resumen_meta = htmlspecialchars(mb_substr($resumen_raw, 0, 220), ENT_QUOTES, 'UTF-8');
-$categoria = htmlspecialchars($articulo['categoria'] ?? 'NOTICIA', ENT_QUOTES, 'UTF-8');
-
-// Validar imagen física y obtener sus dimensiones reales para forzar vista previa gigante
-$img_path = ltrim(trim($articulo['imagen'] ?? ''), '/');
-$ruta_fisica_img = __DIR__ . '/' . $img_path;
-
-if ($img_path !== '' && file_exists($ruta_fisica_img)) {
-    $imagen_relativa = $img_path;
-} else {
-    $imagen_relativa = 'images/default.jpg';
-    $ruta_fisica_img = __DIR__ . '/images/default.jpg';
-}
-
-$imagen = htmlspecialchars($imagen_relativa, ENT_QUOTES, 'UTF-8');
-
-// Detectar dimensiones y tipo MIME para WhatsApp, Facebook y Telegram
-$img_width = 1200;
-$img_height = 630;
-$img_mime = 'image/jpeg';
-
-if (file_exists($ruta_fisica_img)) {
-    $info_img = @getimagesize($ruta_fisica_img);
-    if ($info_img !== false) {
-        $img_width = max(1200, intval($info_img[0]));
-        $img_height = max(630, intval($info_img[1]));
-        if (!empty($info_img['mime'])) {
-            $img_mime = $info_img['mime'];
-        }
+function obtenerUrlImagenAbsolutaArt($img, $url_base) {
+    $img = trim((string)$img);
+    if ($img === '') {
+        return $url_base . '/Mapa_indigena.jpg';
     }
+    if (preg_match('/^https?:\/\//i', $img)) {
+        return $img;
+    }
+    return $url_base . '/' . ltrim($img, '/');
 }
 
-// Detección estricta de protocolo y host compatible con túneles y servidores de producción
-$es_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') 
-    || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443) 
-    || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+function formatearFechaArt($fecha_str) {
+    if (!$fecha_str) return '';
+    $ts = strtotime($fecha_str);
+    if (!$ts) return htmlspecialchars($fecha_str);
+    $meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    return date('d', $ts) . ' de ' . $meses[(int)date('n', $ts) - 1] . ' de ' . date('Y', $ts);
+}
 
-$protocolo = $es_https ? "https://" : "http://";
-$host = $_SERVER['HTTP_HOST'] ?? 'localhost:8000';
-$base_dir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'])), '/');
+$titulo = $articulo ? trim($articulo['titulo'] ?? 'Artículo Portal Amazonía') : 'Artículo no encontrado';
+$categoria = $articulo ? trim($articulo['categoria'] ?? 'Amazonía') : 'Amazonía';
+$autor = $articulo ? trim($articulo['autor'] ?? 'Redacción Amazonía') : '';
+$fecha_fmt = $articulo ? formatearFechaArt($articulo['fecha'] ?? '') : '';
+$contenido_raw = $articulo ? trim($articulo['contenido'] ?? '') : '';
+$resumen_og = $articulo ? trim($articulo['resumen'] ?? '') : '';
+if ($resumen_og === '') {
+    $resumen_og = mb_substr( trim(preg_replace('/\s+/', ' ', strip_tags($contenido_raw))), 0, 180, 'UTF-8' );
+}
+$imagen_rel = $articulo ? trim($articulo['imagen'] ?? '') : '';
+$imagen_abs = obtenerUrlImagenAbsolutaArt($imagen_rel, $url_base);
+$url_canonica = $url_base . '/articulo.php?id=' . urlencode($id_actual);
 
-$segmentos_img = explode('/', $imagen_relativa);
-$segmentos_codificados = array_map('rawurlencode', $segmentos_img);
-$ruta_img_codificada = implode('/', $segmentos_codificados);
+$reacciones = ($articulo && isset($articulo['reacciones']) && is_array($articulo['reacciones'])) ? $articulo['reacciones'] : [];
+$c_like = (int)($reacciones['like'] ?? 0);
+$c_love = (int)($reacciones['love'] ?? 0);
+$c_wow  = (int)($reacciones['wow'] ?? 0);
+$c_sad  = (int)($reacciones['sad'] ?? 0);
 
-$url_imagen_absoluta = $protocolo . $host . ($base_dir !== '' ? $base_dir : '') . '/' . $ruta_img_codificada;
-$url_actual = $protocolo . $host . ($base_dir !== '' ? $base_dir : '') . '/articulo.php?id=' . rawurlencode($id);
-
-$texto_plano_voz = strip_tags($articulo['contenido_completo'] ?? $articulo['resumen'] ?? '');
-$contenido_completo = nl2br(htmlspecialchars($articulo['contenido_completo'] ?? $articulo['resumen'] ?? '', ENT_QUOTES, 'UTF-8'));
-$fecha = htmlspecialchars($articulo['fecha'] ?? '', ENT_QUOTES, 'UTF-8');
-$fuente = htmlspecialchars($articulo['fuente'] ?? '', ENT_QUOTES, 'UTF-8');
-$likes = intval($articulo['likes'] ?? 0);
-$sads = intval($articulo['sads'] ?? 0);
-$comentarios = $articulo['comentarios'] ?? [];
+$comentarios = ($articulo && isset($articulo['comentarios']) && is_array($articulo['comentarios'])) ? $articulo['comentarios'] : [];
 ?>
 <!DOCTYPE html>
-<html lang="es" prefix="og: https://ogp.me/ns#">
+<html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title><?php echo $titulo; ?> | Portal Amazonía</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="<?php echo $resumen_meta; ?>">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+    <title><?php echo htmlspecialchars($titulo); ?> — Portal Amazonía</title>
+    <meta name="description" content="<?php echo htmlspecialchars($resumen_og); ?>">
 
-    <!-- OPEN GRAPH EXTENDIDO PARA WHATSAPP, FACEBOOK, INSTAGRAM Y TELEGRAM (FOTO GIGANTE) -->
-    <meta property="og:site_name" content="Portal Amazonía | Vanguardia y Territorio">
-    <meta property="og:locale" content="es_BO">
+    <!-- Etiquetas Open Graph para que WhatsApp, Facebook y Telegram armen UNA SOLA TARJETA con Foto + Texto -->
     <meta property="og:type" content="article">
-    <meta property="og:title" content="<?php echo $titulo; ?>">
-    <meta property="og:description" content="<?php echo $resumen_meta; ?>">
-    <meta property="og:url" content="<?php echo htmlspecialchars($url_actual, ENT_QUOTES, 'UTF-8'); ?>">
-    <meta property="og:image" content="<?php echo htmlspecialchars($url_imagen_absoluta, ENT_QUOTES, 'UTF-8'); ?>">
-    <meta property="og:image:secure_url" content="<?php echo htmlspecialchars($url_imagen_absoluta, ENT_QUOTES, 'UTF-8'); ?>">
-    <meta property="og:image:type" content="<?php echo htmlspecialchars($img_mime, ENT_QUOTES, 'UTF-8'); ?>">
-    <meta property="og:image:width" content="<?php echo $img_width; ?>">
-    <meta property="og:image:height" content="<?php echo $img_height; ?>">
-    <meta property="og:image:alt" content="<?php echo $titulo; ?>">
-    <meta property="article:section" content="<?php echo $categoria; ?>">
-
-    <!-- TWITTER / X / TELEGRAM LARGE SUMMARY CARD -->
+    <meta property="og:site_name" content="Portal Amazonía">
+    <meta property="og:title" content="<?php echo htmlspecialchars($titulo); ?>">
+    <meta property="og:description" content="<?php echo htmlspecialchars($resumen_og); ?>">
+    <meta property="og:url" content="<?php echo htmlspecialchars($url_canonica); ?>">
+    <meta property="og:image" content="<?php echo htmlspecialchars($imagen_abs); ?>">
+    <meta property="og:image:secure_url" content="<?php echo htmlspecialchars($imagen_abs); ?>">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="<?php echo $titulo; ?>">
-    <meta name="twitter:description" content="<?php echo $resumen_meta; ?>">
-    <meta name="twitter:image" content="<?php echo htmlspecialchars($url_imagen_absoluta, ENT_QUOTES, 'UTF-8'); ?>">
-    <meta name="twitter:image:alt" content="<?php echo $titulo; ?>">
-
-    <link rel="image_src" href="<?php echo htmlspecialchars($url_imagen_absoluta, ENT_QUOTES, 'UTF-8'); ?>">
+    <meta name="twitter:title" content="<?php echo htmlspecialchars($titulo); ?>">
+    <meta name="twitter:description" content="<?php echo htmlspecialchars($resumen_og); ?>">
+    <meta name="twitter:image" content="<?php echo htmlspecialchars($imagen_abs); ?>">
 
     <style>
-        :root { --vibrant-green: #1D9A4C; --accent-gold: #FFB81C; --dark-bg: #121212; --panel-bg: #1e1e1e; --text-main: #E0E0E0; }
-        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { font-family: 'Segoe UI', Roboto, sans-serif; background-color: var(--dark-bg); color: var(--text-main); margin: 0; padding: 0; -webkit-text-size-adjust: 100%; }
-        a, button { touch-action: manipulation; }
-        
-        .lectura-container { max-width: 1100px; margin: 20px auto; background: #111111; border: 1px solid #333; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.9); }
-        .lectura-header { padding: 15px 25px; border-bottom: 1px solid #222; display: flex; justify-content: space-between; align-items: center; background: #0c0c0c; border-top-left-radius: 8px; border-top-right-radius: 8px; }
-        .btn-volver { color: var(--accent-gold); text-decoration: none; font-weight: bold; font-size: 13px; padding: 6px 0; }
-        .btn-volver:hover { color: white; }
-
-        .lectura-layout { display: flex; flex-direction: column; position: relative; align-items: flex-start; }
-        
-        @media (min-width: 900px) {
-            .lectura-layout { display: grid; grid-template-columns: 45% 55%; }
-            .lectura-hero-container { padding: 30px; background: #111111; width: 100%; box-sizing: border-box; }
-            .lectura-hero-container.pinned { position: sticky; top: 20px; align-self: start; }
+        :root {
+            --verde-oscuro: #0b2e1d;
+            --verde-selva: #145334;
+            --verde-vivo: #1f7a4c;
+            --dorado-sol: #e6a817;
+            --crema-fondo: #f4f6f0;
+            --blanco: #ffffff;
+            --texto-principal: #1e2923;
+            --texto-secundario: #4f6257;
+            --borde-suave: #dce3d8;
         }
 
-        .lectura-hero-container { padding: 20px; background: #080808; text-align: center; position: relative; width: 100%; }
-        .lectura-hero { width: 100%; max-height: 75vh; object-fit: contain; border-radius: 6px; box-shadow: 0 4px 20px rgba(0,0,0,0.8); background: #000; border: 1px solid rgba(255,255,255,0.1); }
-        
-        .btn-pin { position: absolute; top: 35px; right: 35px; background: rgba(0,0,0,0.7); color: #aaa; border: 1px solid #555; border-radius: 50%; width: 40px; height: 40px; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); transition: all 0.2s; z-index: 10; }
-        .btn-pin:hover { background: rgba(0,0,0,0.9); color: white; }
-        .btn-pin.activo { background: var(--accent-gold); color: black; border-color: var(--accent-gold); }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
-        .lectura-body { padding: 25px; width: 100%; box-sizing: border-box; }
-        .lectura-body h1 { color: white; font-size: clamp(22px, 3vw, 34px); font-weight: 900; line-height: 1.25; margin-top: 0; margin-bottom: 15px; }
-        .lectura-meta { font-size: 12px; color: var(--accent-gold); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 15px; display: block; }
-        
-        .reproductor-box { display: flex; align-items: center; gap: 12px; background: #1a1a1a; border: 1px solid #333; padding: 10px 16px; border-radius: 6px; margin-bottom: 25px; }
-        .btn-play { background: var(--vibrant-green); color: white; border: none; border-radius: 50%; width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer; transition: 0.15s; flex-shrink: 0; }
-        .btn-play:hover { background: var(--accent-gold); color: black; }
-        .reproductor-info { font-size: 13px; color: #aaa; font-weight: bold; }
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--crema-fondo);
+            color: var(--texto-principal);
+            line-height: 1.65;
+            -webkit-font-smoothing: antialiased;
+        }
 
-        .lectura-texto { font-size: 17px; line-height: 1.8; color: #ddd; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+        .top-header {
+            background: linear-gradient(135deg, var(--verde-oscuro) 0%, var(--verde-selva) 100%);
+            color: var(--blanco);
+            padding: 14px 20px;
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.16);
+        }
 
-        .acciones-superiores { display: flex; justify-content: space-between; align-items: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #222; flex-wrap: wrap; gap: 15px; }
-        .btn-compartir { background: var(--accent-gold); color: black; border: none; padding: 12px 20px; border-radius: 6px; font-weight: 900; cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; transition: transform 0.1s, background 0.15s; width: 100%; justify-content: center; }
-        .btn-compartir:active { transform: scale(0.97); }
-        .btn-compartir:hover { background: white; }
-        
-        .reacciones-footer { display: flex; gap: 10px; width: 100%; margin-top: 15px; }
-        .btn-reaccion { background: #1e1e1e; border: 1px solid #444; color: #ccc; border-radius: 6px; padding: 10px 15px; font-size: 14px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 8px; flex-grow: 1; justify-content: center; transition: transform 0.08s, background 0.12s; user-select: none; }
-        .btn-reaccion:active { transform: scale(0.94); }
-        .btn-reaccion:hover { border-color: var(--accent-gold); color: white; background: rgba(255,184,28,0.1); }
-        .btn-reaccion.seleccionado { background: var(--accent-gold); color: black; border-color: var(--accent-gold); }
+        .header-inner {
+            max-width: 960px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
 
-        .seccion-comentarios { margin-top: 30px; border-top: 1px solid #333; padding: 25px; grid-column: 1 / -1; }
-        .seccion-comentarios h3 { color: var(--accent-gold); font-size: 20px; margin-bottom: 20px; }
-        .form-comentario { display: flex; flex-direction: column; gap: 12px; margin-bottom: 30px; }
-        .input-comentario { background: var(--panel-bg); border: 1px solid #444; color: white; padding: 12px; border-radius: 6px; font-family: inherit; font-size: 14px; box-sizing: border-box; width: 100%; }
-        .input-comentario:focus { outline: none; border-color: var(--vibrant-green); }
-        .btn-enviar { align-self: flex-end; background: var(--vibrant-green); color: white; border: none; padding: 10px 25px; font-weight: bold; border-radius: 6px; cursor: pointer; }
-        .btn-enviar:hover { background: #147037; }
-        .comentario-item { background: #1a1a1a; padding: 15px; border-radius: 6px; margin-bottom: 15px; border-left: 3px solid var(--accent-gold); }
-        .comentario-autor { font-weight: bold; color: white; font-size: 14px; margin-bottom: 4px; }
-        .comentario-fecha { font-size: 11px; color: #888; margin-bottom: 8px; }
-        .comentario-texto { color: #ccc; font-size: 15px; margin: 0; line-height: 1.5; text-align: justify; }
+        .btn-volver {
+            color: var(--blanco);
+            text-decoration: none;
+            font-weight: 700;
+            font-size: 0.92rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background-color: rgba(255,255,255,0.14);
+            padding: 7px 14px;
+            border-radius: 999px;
+        }
 
-        /* NOTIFICACIÓN FLOTANTE INSTANTÁNEA (TOAST) */
-        #toast-notificacion {
-            position: fixed;
-            bottom: 24px;
-            left: 50%;
-            transform: translateX(-50%) translateY(100px);
-            background: var(--accent-gold);
-            color: #000;
+        .btn-volver:hover {
+            background-color: rgba(255,255,255,0.24);
+        }
+
+        .btn-mapa {
+            background-color: var(--dorado-sol);
+            color: var(--verde-oscuro);
+            text-decoration: none;
+            padding: 7px 14px;
+            border-radius: 999px;
+            font-weight: 700;
+            font-size: 0.85rem;
+        }
+
+        .article-wrapper {
+            max-width: 860px;
+            margin: 24px auto 50px;
+            padding: 0 16px;
+        }
+
+        .article-card {
+            background-color: var(--blanco);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 8px 24px rgba(11, 46, 29, 0.09);
+            border: 1px solid var(--borde-suave);
+        }
+
+        .article-hero img {
+            width: 100%;
+            max-height: 480px;
+            object-fit: cover;
+            display: block;
+        }
+
+        .article-content-box {
+            padding: 28px 26px;
+        }
+
+        @media (max-width: 600px) {
+            .article-content-box {
+                padding: 20px 16px;
+            }
+        }
+
+        .article-badge {
+            display: inline-block;
+            background-color: var(--verde-selva);
+            color: var(--dorado-sol);
+            padding: 4px 12px;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            margin-bottom: 12px;
+        }
+
+        .article-title {
+            font-size: 1.75rem;
             font-weight: 800;
-            font-size: 13px;
-            padding: 12px 22px;
-            border-radius: 30px;
-            box-shadow: 0 8px 25px rgba(0,0,0,0.8);
-            z-index: 9999;
-            opacity: 0;
-            pointer-events: none;
-            transition: transform 0.22s ease, opacity 0.22s ease;
-            text-align: center;
-            max-width: 90vw;
+            color: var(--verde-oscuro);
+            line-height: 1.25;
+            margin-bottom: 12px;
         }
-        #toast-notificacion.mostrar {
-            transform: translateX(-50%) translateY(0);
-            opacity: 1;
+
+        @media (max-width: 600px) {
+            .article-title {
+                font-size: 1.38rem;
+            }
+        }
+
+        .article-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            font-size: 0.85rem;
+            color: var(--texto-secundario);
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--borde-suave);
+            margin-bottom: 18px;
+        }
+
+        /* Barra de herramientas: Lector de Voz + Compartir en una sola tarjeta */
+        .toolbar-article {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+            justify-content: space-between;
+            background-color: #f3f7f4;
+            padding: 12px 14px;
+            border-radius: 12px;
+            margin-bottom: 22px;
+            border: 1px solid var(--borde-suave);
+        }
+
+        .tts-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .btn-tts {
+            background-color: var(--verde-selva);
+            color: var(--blanco);
+            border: none;
+            padding: 8px 14px;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            font-weight: 700;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-tts.stop {
+            background-color: #9e2a2b;
+            display: none;
+        }
+
+        .btn-share-main {
+            background-color: var(--dorado-sol);
+            color: var(--verde-oscuro);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 999px;
+            font-size: 0.86rem;
+            font-weight: 800;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* Cuerpo del artículo justificado */
+        .article-body-text {
+            font-size: 1.04rem;
+            color: var(--texto-principal);
+            text-align: justify;
+            text-justify: inter-word;
+            hyphens: auto;
+            -webkit-hyphens: auto;
+            line-height: 1.75;
+        }
+
+        .article-body-text p {
+            margin-bottom: 16px;
+        }
+
+        /* Reacciones 0ms */
+        .reactions-section {
+            margin-top: 26px;
+            padding-top: 18px;
+            border-top: 1px solid var(--borde-suave);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .reactions-bar {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .react-btn {
+            background: var(--blanco);
+            border: 1px solid var(--borde-suave);
+            border-radius: 999px;
+            padding: 7px 13px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-weight: 700;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .react-btn.voted {
+            background-color: #e6f4ec;
+            border-color: var(--verde-vivo);
+            color: var(--verde-oscuro);
+        }
+
+        /* Sección de comentarios */
+        .comments-box {
+            margin-top: 28px;
+            background-color: var(--blanco);
+            border-radius: 16px;
+            padding: 24px;
+            border: 1px solid var(--borde-suave);
+        }
+
+        .comments-box h3 {
+            color: var(--verde-oscuro);
+            margin-bottom: 14px;
+            font-size: 1.2rem;
+        }
+
+        .comment-form {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 22px;
+        }
+
+        .comment-form input, .comment-form textarea {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--borde-suave);
+            border-radius: 10px;
+            font-family: inherit;
+            font-size: 0.92rem;
+        }
+
+        .comment-form button {
+            align-self: flex-start;
+            background-color: var(--verde-selva);
+            color: var(--blanco);
+            border: none;
+            padding: 9px 18px;
+            border-radius: 999px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .comment-item {
+            padding: 12px 0;
+            border-bottom: 1px solid var(--borde-suave);
+        }
+
+        .comment-item:last-child {
+            border-bottom: none;
+        }
+
+        .comment-head {
+            font-size: 0.84rem;
+            color: var(--texto-secundario);
+            margin-bottom: 4px;
+        }
+
+        .comment-head strong {
+            color: var(--verde-oscuro);
         }
     </style>
 </head>
 <body>
 
-<div class="lectura-container">
-    <div class="lectura-header">
-        <a href="index.php" class="btn-volver">← Volver al Mosaico</a>
-        <span style="font-size:11px; color:#888; text-transform:uppercase;">Inmersión Total</span>
+<header class="top-header">
+    <div class="header-inner">
+        <a href="index.php" class="btn-volver">← Volver a Portada</a>
+        <a href="mapa.php" class="btn-mapa">🗺️ Mapa Indígena</a>
     </div>
+</header>
 
-    <div class="lectura-layout">
-        <!-- FOTOGRAFÍA CON PIN -->
-        <div class="lectura-hero-container" id="heroContainer">
-            <button class="btn-pin" id="btnPin" onclick="togglePin()" title="Clavar o desclavar foto">📌</button>
-            <img src="<?php echo $imagen; ?>" id="heroImagenArticulo" class="lectura-hero" alt="<?php echo $titulo; ?>" decoding="async" onerror="this.onerror=null; this.src='images/default.jpg';">
+<main class="article-wrapper">
+    <?php if (!$articulo): ?>
+        <div class="article-card" style="padding: 36px; text-align: center;">
+            <h2>Artículo no encontrado</h2>
+            <p style="margin-top: 10px;"><a href="index.php">Regresar al inicio</a></p>
         </div>
-
-        <!-- CONTENIDO Y AUDIO -->
-        <div class="lectura-body">
-            <span class="lectura-meta"><?php echo $fecha; ?><?php echo $fuente ? " | Fuente: $fuente" : ""; ?></span>
-            <h1><?php echo $titulo; ?></h1>
-            
-            <div class="reproductor-box">
-                <button class="btn-play" id="btnPlay" onclick="toggleAudio()">▶</button>
-                <div class="reproductor-info" id="infoAudio">Escuchar artículo completo (Audio)</div>
-            </div>
-
-            <div class="lectura-texto">
-                <?php echo $contenido_completo; ?>
-            </div>
-
-            <div class="acciones-superiores">
-                <button class="btn-compartir" onclick="compartirPaginaConFoto()">🔗 Compartir Artículo con Foto, Resumen y Enlace</button>
-            </div>
-
-            <!-- REACCIONES INSTANTÁNEAS (0ms) -->
-            <div class="reacciones-footer">
-                <button class="btn-reaccion" id="btn-like-<?php echo $id; ?>" onclick="reaccionar('<?php echo $id; ?>', 'like')">👍 <span id="likes-<?php echo $id; ?>"><?php echo $likes; ?></span></button>
-                <button class="btn-reaccion" id="btn-sad-<?php echo $id; ?>" onclick="reaccionar('<?php echo $id; ?>', 'sad')">😢 <span id="sads-<?php echo $id; ?>"><?php echo $sads; ?></span></button>
-            </div>
-        </div>
-    </div>
-
-    <div class="seccion-comentarios">
-        <h3>Comentarios de la Comunidad</h3>
-        
-        <form method="POST" class="form-comentario">
-            <input type="hidden" name="nuevo_comentario" value="1">
-            <input type="text" name="autor" class="input-comentario" placeholder="Tu Nombre o Seudónimo" required>
-            <textarea name="comentario" class="input-comentario" rows="3" placeholder="Escribe tu comentario u opinión..." required></textarea>
-            <button type="submit" class="btn-enviar">Publicar Comentario</button>
-        </form>
-
-        <?php if (empty($comentarios)): ?>
-            <p style="color: #777; font-style: italic;">Sé el primero en comentar este artículo.</p>
-        <?php else: ?>
-            <?php foreach ($comentarios as $com): ?>
-                <div class="comentario-item">
-                    <div class="comentario-autor"><?php echo htmlspecialchars($com['autor']); ?></div>
-                    <div class="comentario-fecha"><?php echo htmlspecialchars($com['fecha']); ?></div>
-                    <p class="comentario-texto"><?php echo nl2br(htmlspecialchars($com['texto'])); ?></p>
+    <?php else: ?>
+        <article class="article-card">
+            <?php if ($imagen_rel !== ''): ?>
+                <div class="article-hero">
+                    <img src="<?php echo htmlspecialchars($imagen_rel); ?>" alt="<?php echo htmlspecialchars($titulo); ?>">
                 </div>
-            <?php endforeach; ?>
-        <?php endif; ?>
-    </div>
-</div>
+            <?php endif; ?>
 
-<div id="toast-notificacion"></div>
+            <div class="article-content-box">
+                <span class="article-badge"><?php echo htmlspecialchars($categoria); ?></span>
+                <h1 class="article-title" id="tituloArticulo"><?php echo htmlspecialchars($titulo); ?></h1>
+
+                <div class="article-meta">
+                    <span>✍️ Por <strong><?php echo htmlspecialchars($autor); ?></strong></span>
+                    <?php if ($fecha_fmt !== ''): ?>
+                        <span>📅 <?php echo $fecha_fmt; ?></span>
+                    <?php endif; ?>
+                </div>
+
+                <div class="toolbar-article">
+                    <div class="tts-controls">
+                        <button type="button" class="btn-tts" id="btnPlayTTS" onclick="alternarLecturaVoz()">
+                            ▶ Escuchar artículo
+                        </button>
+                        <button type="button" class="btn-tts stop" id="btnStopTTS" onclick="detenerLecturaVoz()">
+                            ⏹ Detener
+                        </button>
+                    </div>
+
+                    <button type="button"
+                            class="btn-share-main"
+                            data-titulo="<?php echo htmlspecialchars($titulo, ENT_QUOTES); ?>"
+                            data-resumen="<?php echo htmlspecialchars($resumen_og, ENT_QUOTES); ?>"
+                            data-url="<?php echo htmlspecialchars($url_canonica, ENT_QUOTES); ?>"
+                            onclick="compartirConFotoReal(this)">
+                        🔗 Compartir artículo
+                    </button>
+                </div>
+
+                <div class="article-body-text" id="cuerpoArticulo">
+                    <?php
+                    $parrafos = preg_split('/\n\s*\n/', $contenido_raw);
+                    foreach ($parrafos as $p) {
+                        $p = trim($p);
+                        if ($p !== '') {
+                            echo '<p>' . nl2br(htmlspecialchars($p)) . '</p>';
+                        }
+                    }
+                    ?>
+                </div>
+
+                <div class="reactions-section">
+                    <div class="reactions-bar">
+                        <button type="button" class="react-btn" data-id="<?php echo htmlspecialchars($id_actual); ?>" data-tipo="like" onclick="reaccionarInstantaneo(this)">
+                            👍 <span class="count"><?php echo $c_like; ?></span>
+                        </button>
+                        <button type="button" class="react-btn" data-id="<?php echo htmlspecialchars($id_actual); ?>" data-tipo="love" onclick="reaccionarInstantaneo(this)">
+                            ❤️ <span class="count"><?php echo $c_love; ?></span>
+                        </button>
+                        <button type="button" class="react-btn" data-id="<?php echo htmlspecialchars($id_actual); ?>" data-tipo="wow" onclick="reaccionarInstantaneo(this)">
+                            😮 <span class="count"><?php echo $c_wow; ?></span>
+                        </button>
+                        <button type="button" class="react-btn" data-id="<?php echo htmlspecialchars($id_actual); ?>" data-tipo="sad" onclick="reaccionarInstantaneo(this)">
+                            😢 <span class="count"><?php echo $c_sad; ?></span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </article>
+
+        <section class="comments-box" id="comentarios">
+            <h3>💬 Comentarios (<?php echo count($comentarios); ?>)</h3>
+            <form class="comment-form" method="POST" action="articulo.php?id=<?php echo urlencode($id_actual); ?>">
+                <input type="hidden" name="accion" value="comentar">
+                <input type="hidden" name="id" value="<?php echo htmlspecialchars($id_actual); ?>">
+                <input type="text" name="nombre" placeholder="Tu nombre (opcional)" maxlength="60">
+                <textarea name="comentario" rows="3" placeholder="Escribe tu opinión o aporte sobre este tema..." required></textarea>
+                <button type="submit">Publicar comentario</button>
+            </form>
+
+            <?php if (empty($comentarios)): ?>
+                <p style="color: var(--texto-secundario); font-size: 0.9rem;">Sé el primero en comentar este artículo.</p>
+            <?php else: ?>
+                <?php foreach (array_reverse($comentarios) as $com): ?>
+                    <div class="comment-item">
+                        <div class="comment-head">
+                            <strong><?php echo htmlspecialchars($com['nombre'] ?? 'Lector'); ?></strong>
+                            • <?php echo htmlspecialchars($com['fecha'] ?? ''); ?>
+                        </div>
+                        <div><?php echo nl2br(htmlspecialchars($com['texto'] ?? '')); ?></div>
+                    </div>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </section>
+    <?php endif; ?>
+</main>
 
 <script>
-    const datosCompartir = {
-        titulo: <?php echo json_encode($titulo_raw, JSON_UNESCAPED_UNICODE); ?>,
-        resumen: <?php echo json_encode(mb_substr($resumen_raw, 0, 220), JSON_UNESCAPED_UNICODE); ?>,
-        url: <?php echo json_encode($url_actual, JSON_UNESCAPED_UNICODE); ?>
-    };
-
-    let toastTimer = null;
-    function mostrarToast(mensaje) {
-        const toast = document.getElementById('toast-notificacion');
-        toast.textContent = mensaje;
-        toast.classList.add('mostrar');
-        if (toastTimer) clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => {
-            toast.classList.remove('mostrar');
-        }, 2800);
-    }
-
-    document.addEventListener("DOMContentLoaded", function() {
-        let idArt = <?php echo json_encode(strval($id)); ?>;
-        let estado = localStorage.getItem(`reaccion_${idArt}`);
-        if (estado) {
-            let btn = document.getElementById(`btn-${estado}-${idArt}`);
-            if (btn) btn.classList.add('seleccionado');
+// 1. Reacciones Instantáneas en 0 ms
+document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.react-btn').forEach(btn => {
+        const id = btn.getAttribute('data-id');
+        const tipo = btn.getAttribute('data-tipo');
+        if (localStorage.getItem('reaccion_' + id + '_' + tipo) === '1') {
+            btn.classList.add('voted');
         }
     });
+});
 
-    function togglePin() {
-        const container = document.getElementById('heroContainer');
-        const btn = document.getElementById('btnPin');
-        container.classList.toggle('pinned');
-        btn.classList.toggle('activo');
+function reaccionarInstantaneo(btn) {
+    const id = btn.getAttribute('data-id');
+    const tipo = btn.getAttribute('data-tipo');
+    const countSpan = btn.querySelector('.count');
+    if (!id || !tipo || !countSpan) return;
+
+    const key = 'reaccion_' + id + '_' + tipo;
+    const yaVoto = localStorage.getItem(key) === '1';
+    const delta = yaVoto ? -1 : 1;
+
+    let actual = parseInt(countSpan.textContent, 10) || 0;
+    countSpan.textContent = Math.max(0, actual + delta);
+
+    if (yaVoto) {
+        localStorage.removeItem(key);
+        btn.classList.remove('voted');
+    } else {
+        localStorage.setItem(key, '1');
+        btn.classList.add('voted');
     }
 
-    // REACCIONES INSTANTÁNEAS EN 0 MILISEGUNDOS (OPTIMISTIC UI)
-    function reaccionar(id, tipo) {
-        const claveLocal = `reaccion_${id}`;
-        const previo = localStorage.getItem(claveLocal) || '';
+    const formData = new FormData();
+    formData.append('accion', 'reaccionar');
+    formData.append('id', id);
+    formData.append('tipo', tipo);
+    formData.append('delta', delta);
 
-        const spanLikes = document.getElementById(`likes-${id}`);
-        const spanSads = document.getElementById(`sads-${id}`);
-        const btnLike = document.getElementById(`btn-like-${id}`);
-        const btnSad = document.getElementById(`btn-sad-${id}`);
+    fetch('articulo.php', {
+        method: 'POST',
+        body: formData
+    }).catch(() => {});
+}
 
-        let likesActuales = parseInt(spanLikes.textContent, 10) || 0;
-        let sadsActuales = parseInt(spanSads.textContent, 10) || 0;
-        let nuevoEstado = '';
+// 2. Compartir en UNA SOLA TARJETA (Foto Open Graph + Título + Resumen + Enlace integrados)
+async function compartirConFotoReal(btn) {
+    const titulo = btn.getAttribute('data-titulo') || document.title;
+    const resumen = btn.getAttribute('data-resumen') || '';
+    const url = btn.getAttribute('data-url') || window.location.href;
 
-        // 1. Respuesta visual inmediata (0ms)
-        if (previo === tipo) {
-            if (tipo === 'like') likesActuales = Math.max(0, likesActuales - 1);
-            if (tipo === 'sad') sadsActuales = Math.max(0, sadsActuales - 1);
-            nuevoEstado = '';
-        } else {
-            if (previo === 'like') likesActuales = Math.max(0, likesActuales - 1);
-            if (previo === 'sad') sadsActuales = Math.max(0, sadsActuales - 1);
-            if (tipo === 'like') likesActuales++;
-            if (tipo === 'sad') sadsActuales++;
-            nuevoEstado = tipo;
-        }
+    const textoCompartir = `*${titulo}*\n\n${resumen}`;
 
-        spanLikes.textContent = likesActuales;
-        spanSads.textContent = sadsActuales;
-        if (btnLike) btnLike.classList.remove('seleccionado');
-        if (btnSad) btnSad.classList.remove('seleccionado');
-
-        if (nuevoEstado !== '') {
-            const btnActivo = document.getElementById(`btn-${nuevoEstado}-${id}`);
-            if (btnActivo) btnActivo.classList.add('seleccionado');
-            localStorage.setItem(claveLocal, nuevoEstado);
-        } else {
-            localStorage.removeItem(claveLocal);
-        }
-
-        // 2. Persistencia en segundo plano
-        fetch(`articulo.php?id=${encodeURIComponent(id)}&ajax_reaccionar=1&tipo=${encodeURIComponent(tipo)}&previo=${encodeURIComponent(previo)}`, {
-            cache: 'no-store'
-        }).catch(() => {});
-    }
-
-    const textoParaAudio = <?php echo json_encode(strip_tags($titulo_raw . ". " . $texto_plano_voz), JSON_UNESCAPED_UNICODE); ?>;
-    let synth = window.speechSynthesis;
-    let utterance = null;
-    let reproduciendo = false;
-
-    function toggleAudio() {
-        const btnPlay = document.getElementById('btnPlay');
-        const infoAudio = document.getElementById('infoAudio');
-
-        if (!synth) {
-            mostrarToast("Tu navegador no soporta reproducción de voz.");
-            return;
-        }
-
-        if (reproduciendo) {
-            synth.cancel();
-            reproduciendo = false;
-            btnPlay.textContent = "▶";
-            infoAudio.textContent = "Escuchar artículo completo (Audio)";
-        } else {
-            utterance = new SpeechSynthesisUtterance(textoParaAudio);
-            utterance.lang = 'es-ES';
-            utterance.rate = 1.0;
-
-            utterance.onend = function() {
-                reproduciendo = false;
-                btnPlay.textContent = "▶";
-                infoAudio.textContent = "Escuchar artículo completo (Audio)";
-            };
-
-            synth.speak(utterance);
-            reproduciendo = true;
-            btnPlay.textContent = "❚❚";
-            infoAudio.textContent = "Reproduciendo audio...";
-        }
-    }
-
-    // Convierte la foto ya cargada en pantalla a un archivo JPG listo para adjuntar en 0ms
-    function obtenerArchivoDesdeHero() {
-        return new Promise((resolve) => {
-            try {
-                const imgElement = document.getElementById('heroImagenArticulo');
-                if (!imgElement || !imgElement.complete || imgElement.naturalWidth === 0) {
-                    resolve(null);
-                    return;
-                }
-                const canvas = document.createElement('canvas');
-                const maxDim = 1200;
-                let w = imgElement.naturalWidth;
-                let h = imgElement.naturalHeight;
-                if (w > maxDim || h > maxDim) {
-                    if (w > h) {
-                        h = Math.round((h * maxDim) / w);
-                        w = maxDim;
-                    } else {
-                        w = Math.round((w * maxDim) / h);
-                        h = maxDim;
-                    }
-                }
-                canvas.width = w;
-                canvas.height = h;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(imgElement, 0, 0, w, h);
-                canvas.toBlob((blob) => {
-                    if (blob) {
-                        const archivo = new File([blob], 'noticia_amazonia.jpg', { type: 'image/jpeg' });
-                        resolve(archivo);
-                    } else {
-                        resolve(null);
-                    }
-                }, 'image/jpeg', 0.85);
-            } catch (e) {
-                resolve(null);
-            }
-        });
-    }
-
-    // COMPARTIR ADJUNTANDO LA FOTOGRAFÍA FÍSICA + TÍTULO + RESUMEN + ENLACE
-    async function compartirPaginaConFoto() {
-        const textoFormateado = `*${datosCompartir.titulo}*\n\n${datosCompartir.resumen}\n\n${datosCompartir.url}`;
-
-        if (navigator.share) {
-            try {
-                const archivoFoto = await obtenerArchivoDesdeHero();
-                if (archivoFoto && navigator.canShare && navigator.canShare({ files: [archivoFoto] })) {
-                    await navigator.share({
-                        files: [archivoFoto],
-                        title: datosCompartir.titulo,
-                        text: textoFormateado
-                    });
-                    return;
-                }
-                await navigator.share({
-                    title: datosCompartir.titulo,
-                    text: `${datosCompartir.titulo} — ${datosCompartir.resumen}`,
-                    url: datosCompartir.url
-                });
-                return;
-            } catch (err) {
-                if (err.name === 'AbortError') return;
-            }
-        }
-
-        if (navigator.clipboard) {
-            navigator.clipboard.writeText(textoFormateado).then(function() {
-                mostrarToast("📋 ¡Copiado con título, resumen y enlace!");
+    if (navigator.share) {
+        try {
+            await navigator.share({
+                title: titulo,
+                text: textoCompartir,
+                url: url
             });
+            return;
+        } catch (err) {
+            if (err && err.name === 'AbortError') return;
         }
     }
-</script>
 
+    const textoCompleto = `*${titulo}*\n\n${resumen}\n\n${url}`;
+    if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+        window.open('https://api.whatsapp.com/send?text=' + encodeURIComponent(textoCompleto), '_blank');
+    } else if (navigator.clipboard) {
+        navigator.clipboard.writeText(textoCompleto);
+        alert('Artículo y enlace copiados al portapapeles');
+    }
+}
+
+// 3. Sintetizador de Voz (Web Speech API)
+let leyendo = false;
+function alternarLecturaVoz() {
+    if (!('speechSynthesis' in window)) {
+        alert('Tu navegador no soporta lectura por voz.');
+        return;
+    }
+    const synth = window.speechSynthesis;
+    const btnPlay = document.getElementById('btnPlayTTS');
+    const btnStop = document.getElementById('btnStopTTS');
+
+    if (synth.speaking) {
+        if (synth.paused) {
+            synth.resume();
+            btnPlay.textContent = '⏸ Pausar voz';
+        } else {
+            synth.pause();
+            btnPlay.textContent = '▶ Continuar voz';
+        }
+        return;
+    }
+
+    const titulo = document.getElementById('tituloArticulo')?.innerText || '';
+    const cuerpo = document.getElementById('cuerpoArticulo')?.innerText || '';
+    const utter = new SpeechSynthesisUtterance(titulo + '. ' + cuerpo);
+    utter.lang = 'es-ES';
+    utter.rate = 1.0;
+
+    utter.onend = function() {
+        btnPlay.textContent = '▶ Escuchar artículo';
+        btnStop.style.display = 'none';
+    };
+
+    btnPlay.textContent = '⏸ Pausar voz';
+    btnStop.style.display = 'inline-flex';
+    synth.cancel();
+    synth.speak(utter);
+}
+
+function detenerLecturaVoz() {
+    if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+    }
+    document.getElementById('btnPlayTTS').textContent = '▶ Escuchar artículo';
+    document.getElementById('btnStopTTS').style.display = 'none';
+}
+window.addEventListener('beforeunload', detenerLecturaVoz);
+</script>
 </body>
 </html>
