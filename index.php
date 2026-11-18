@@ -806,44 +806,30 @@ $url_base_portal = $protocolo . $host . ($base_dir !== '' ? $base_dir : '');
 
     // COMPARTIR CON FOTO FÍSICA ADJUNTA + TÍTULO + RESUMEN + ENLACE (IGUAL QUE PORTAL-IA-WEB.WEB.APP)
     async function compartirConFotoReal(btn) {
-        const id = btn.getAttribute('data-id');
-        const url = btn.getAttribute('data-url');
-        const titulo = btn.getAttribute('data-titulo');
-        const resumen = btn.getAttribute('data-resumen');
-        const textoFormateado = `*${titulo}*\n\n${resumen}\n\n${url}`;
+    const url = btn.getAttribute('data-url');
+    const titulo = btn.getAttribute('data-titulo');
+    const resumen = btn.getAttribute('data-resumen');
+    const textoFormateado = `*${titulo}*\n\n${resumen}\n\n${url}`;
 
-        const imgEl = document.getElementById(`img-art-${id}`);
-
-        if (navigator.share) {
-            try {
-                const archivoFoto = await obtenerArchivoDesdeImgDOM(imgEl);
-                if (archivoFoto && navigator.canShare && navigator.canShare({ files: [archivoFoto] })) {
-                    await navigator.share({
-                        files: [archivoFoto],
-                        title: titulo,
-                        text: textoFormateado
-                    });
-                    return;
-                }
-                // Si el dispositivo no soporta archivos adjuntos, comparte texto + enlace
-                await navigator.share({
-                    title: titulo,
-                    text: `${titulo} — ${resumen}`,
-                    url: url
-                });
-                return;
-            } catch (err) {
-                if (err.name === 'AbortError') return;
-            }
-        }
-
-        // Respaldo instantáneo en portapapeles para PC de escritorio
-        if (navigator.clipboard) {
-            navigator.clipboard.writeText(textoFormateado).then(() => {
-                mostrarToast("📋 ¡Copiado con título, resumen y enlace!");
+    if (navigator.share) {
+        try {
+            await navigator.share({
+                title: titulo,
+                text: `*${titulo}*\n\n${resumen}`,
+                url: url
             });
+            return;
+        } catch (err) {
+            if (err.name === 'AbortError') return;
         }
     }
+
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(textoFormateado).then(() => {
+            mostrarToast("📋 ¡Copiado con título, resumen y enlace!");
+        });
+    }
+}
 </script>
 
 </body>
