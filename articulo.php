@@ -238,10 +238,15 @@ $comentarios = $articulo['comentarios'] ?? [];
 
         .lectura-texto { font-size: 17px; line-height: 1.8; color: #ddd; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
 
-        .acciones-superiores { display: flex; justify-content: space-between; align-items: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #222; flex-wrap: wrap; gap: 15px; }
-        .btn-compartir { background: var(--accent-gold); color: black; border: none; padding: 12px 20px; border-radius: 6px; font-weight: 900; cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; transition: transform 0.1s, background 0.15s; width: 100%; justify-content: center; }
+        .acciones-superiores { display: flex; justify-content: flex-start; align-items: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #222; flex-wrap: wrap; gap: 8px; }
+        .btn-compartir { background: var(--accent-gold); color: black; border: none; padding: 10px 16px; border-radius: 6px; font-weight: 900; cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; transition: transform 0.1s, background 0.15s; }
         .btn-compartir:active { transform: scale(0.97); }
         .btn-compartir:hover { background: white; }
+
+        .btn-red-social { background: #222; color: white; border: 1px solid #444; padding: 10px 14px; border-radius: 6px; font-weight: bold; font-size: 12px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; transition: 0.15s; }
+        .btn-red-social.fb:hover { background: #1877F2; border-color: #1877F2; }
+        .btn-red-social.x:hover { background: #000; border-color: #000; }
+        .btn-red-social.tiktok:hover { background: #FE2C55; border-color: #FE2C55; }
         
         .reacciones-footer { display: flex; gap: 10px; width: 100%; margin-top: 15px; }
         .btn-reaccion { background: #1e1e1e; border: 1px solid #444; color: #ccc; border-radius: 6px; padding: 10px 15px; font-size: 14px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 8px; flex-grow: 1; justify-content: center; transition: transform 0.08s, background 0.12s; user-select: none; }
@@ -317,7 +322,10 @@ $comentarios = $articulo['comentarios'] ?? [];
             </div>
 
             <div class="acciones-superiores">
-                <button class="btn-compartir" onclick="compartirPaginaConFoto()">🔗 Compartir Artículo con Foto, Resumen y Enlace</button>
+                <button class="btn-compartir" onclick="compartirPaginaConFoto()">🔗 Compartir</button>
+                <a href="https://www.facebook.com/sharer/sharer.php?u=<?php echo urlencode($url_actual); ?>" target="_blank" rel="noopener" class="btn-red-social fb">Facebook</a>
+                <a href="https://twitter.com/intent/tweet?url=<?php echo urlencode($url_actual); ?>&text=<?php echo urlencode($titulo_raw); ?>" target="_blank" rel="noopener" class="btn-red-social x">X</a>
+                <a href="https://www.tiktok.com/" target="_blank" rel="noopener" class="btn-red-social tiktok" title="Abrir TikTok">TikTok</a>
             </div>
 
             <!-- REACCIONES INSTANTÁNEAS (0ms) -->
@@ -402,7 +410,6 @@ $comentarios = $articulo['comentarios'] ?? [];
         let sadsActuales = parseInt(spanSads.textContent, 10) || 0;
         let nuevoEstado = '';
 
-        // 1. Respuesta visual inmediata (0ms)
         if (previo === tipo) {
             if (tipo === 'like') likesActuales = Math.max(0, likesActuales - 1);
             if (tipo === 'sad') sadsActuales = Math.max(0, sadsActuales - 1);
@@ -428,7 +435,6 @@ $comentarios = $articulo['comentarios'] ?? [];
             localStorage.removeItem(claveLocal);
         }
 
-        // 2. Persistencia en segundo plano
         fetch(`articulo.php?id=${encodeURIComponent(id)}&ajax_reaccionar=1&tipo=${encodeURIComponent(tipo)}&previo=${encodeURIComponent(previo)}`, {
             cache: 'no-store'
         }).catch(() => {});

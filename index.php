@@ -438,16 +438,16 @@ $url_base_portal = $protocolo . $host . ($base_dir !== '' ? $base_dir : '');
         }
         .acciones-fila {
             display: flex;
-            gap: 10px;
+            gap: 5px;
             align-items: center;
         }
         .btn-leer {
-            padding: 10px 15px;
+            padding: 10px 10px;
             background: var(--accent-gold);
             color: black;
             border: none;
             font-weight: 900;
-            font-size: 11px;
+            font-size: 10px;
             cursor: pointer;
             border-radius: 4px;
             text-transform: uppercase;
@@ -466,20 +466,21 @@ $url_base_portal = $protocolo . $host . ($base_dir !== '' ? $base_dir : '');
             background: #222;
             color: white;
             border: 1px solid #444;
-            padding: 8px 14px;
+            padding: 8px 10px;
             border-radius: 4px;
-            font-size: 14px;
+            font-size: 12px;
             cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
             transition: transform 0.1s, background 0.15s;
         }
-        .btn-compartir-tarjeta:active {
-            transform: scale(0.92);
-        }
-        .btn-compartir-tarjeta:hover {
-            background: var(--accent-gold);
-            color: black;
-            border-color: var(--accent-gold);
-        }
+        .btn-compartir-tarjeta.fb:hover { background: #1877F2; border-color: #1877F2; }
+        .btn-compartir-tarjeta.x:hover { background: #000; border-color: #000; }
+        .btn-compartir-tarjeta.tiktok:hover { background: #FE2C55; border-color: #FE2C55; }
+        .btn-compartir-tarjeta.share:hover { background: var(--accent-gold); color: black; border-color: var(--accent-gold); }
 
         .reacciones-bar {
             display: flex;
@@ -614,14 +615,24 @@ $url_base_portal = $protocolo . $host . ($base_dir !== '' ? $base_dir : '');
                     </div>
                     <div class="tarjeta-footer">
                         <div class="acciones-fila">
-                            <a href="articulo.php?id=<?php echo rawurlencode($id); ?>" class="btn-leer">Leer Artículo (Inmersión)</a>
-                            <button class="btn-compartir-tarjeta" 
+                            <a href="articulo.php?id=<?php echo rawurlencode($id); ?>" class="btn-leer">Leer</a>
+                            
+                            <button class="btn-compartir-tarjeta share" 
                                     data-id="<?php echo htmlspecialchars($id, ENT_QUOTES, 'UTF-8'); ?>"
                                     data-url="<?php echo htmlspecialchars($url_articulo, ENT_QUOTES, 'UTF-8'); ?>"
                                     data-titulo="<?php echo $titulo; ?>"
                                     data-resumen="<?php echo htmlspecialchars(mb_substr($resumen_raw, 0, 220), ENT_QUOTES, 'UTF-8'); ?>"
                                     onclick="compartirConFotoReal(this)" 
-                                    title="Compartir con foto adjunta, resumen y enlace">🔗</button>
+                                    title="Compartir enlace">🔗</button>
+
+                            <a href="https://www.facebook.com/sharer/sharer.php?u=<?php echo urlencode($url_articulo); ?>" 
+                               target="_blank" rel="noopener" class="btn-compartir-tarjeta fb" title="Compartir en Facebook">f</a>
+
+                            <a href="https://twitter.com/intent/tweet?url=<?php echo urlencode($url_articulo); ?>&text=<?php echo urlencode($titulo_raw); ?>" 
+                               target="_blank" rel="noopener" class="btn-compartir-tarjeta x" title="Compartir en X">𝕏</a>
+
+                            <a href="https://www.tiktok.com/" 
+                               target="_blank" rel="noopener" class="btn-compartir-tarjeta tiktok" title="Abrir TikTok">🎵</a>
                         </div>
                         <div class="reacciones-bar">
                             <button class="btn-reaccion" id="btn-like-<?php echo $id; ?>" onclick="reaccionar('<?php echo $id; ?>', 'like')">👍 <span id="likes-<?php echo $id; ?>"><?php echo $likes; ?></span></button>
