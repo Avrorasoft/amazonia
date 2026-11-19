@@ -116,7 +116,7 @@ $titulo = htmlspecialchars($titulo_raw, ENT_QUOTES, 'UTF-8');
 $resumen_meta = htmlspecialchars(mb_substr($resumen_raw, 0, 220), ENT_QUOTES, 'UTF-8');
 $categoria = htmlspecialchars($articulo['categoria'] ?? 'NOTICIA', ENT_QUOTES, 'UTF-8');
 
-// Validar imagen física y obtener sus dimensiones reales para forzar vista previa gigante
+// Validar imagen física y obtener sus dimensiones medianas estándar para vista previa en redes
 $img_path = ltrim(trim($articulo['imagen'] ?? ''), '/');
 $ruta_fisica_img = __DIR__ . '/' . $img_path;
 
@@ -129,16 +129,16 @@ if ($img_path !== '' && file_exists($ruta_fisica_img)) {
 
 $imagen = htmlspecialchars($imagen_relativa, ENT_QUOTES, 'UTF-8');
 
-// Detectar dimensiones y tipo MIME para WhatsApp, Facebook y Telegram
-$img_width = 1200;
-$img_height = 630;
+// Detectar dimensiones medianas (800x420 a 1200x630) y tipo MIME para WhatsApp, Facebook y Telegram
+$img_width = 800;
+$img_height = 420;
 $img_mime = 'image/jpeg';
 
 if (file_exists($ruta_fisica_img)) {
     $info_img = @getimagesize($ruta_fisica_img);
     if ($info_img !== false) {
-        $img_width = max(1200, intval($info_img[0]));
-        $img_height = max(630, intval($info_img[1]));
+        $img_width = max(800, min(1200, intval($info_img[0])));
+        $img_height = max(420, min(630, intval($info_img[1])));
         if (!empty($info_img['mime'])) {
             $img_mime = $info_img['mime'];
         }
@@ -177,7 +177,7 @@ $comentarios = $articulo['comentarios'] ?? [];
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="<?php echo $resumen_meta; ?>">
 
-    <!-- OPEN GRAPH EXTENDIDO PARA WHATSAPP, FACEBOOK, INSTAGRAM Y TELEGRAM (FOTO GIGANTE) -->
+    <!-- OPEN GRAPH EXTENDIDO PARA WHATSAPP, FACEBOOK, INSTAGRAM Y TELEGRAM (VISTA PREVIA MEDIANA) -->
     <meta property="og:site_name" content="Portal Amazonía | Vanguardia y Territorio">
     <meta property="og:locale" content="es_BO">
     <meta property="og:type" content="article">
@@ -477,7 +477,7 @@ $comentarios = $articulo['comentarios'] ?? [];
         }
     }
 
-    // Convierte la foto ya cargada en pantalla a un archivo JPG listo para adjuntar en 0ms
+    // Convierte la foto ya cargada en pantalla a un archivo JPG de tamaño mediano listo para adjuntar en 0ms
     function obtenerArchivoDesdeHero() {
         return new Promise((resolve) => {
             try {
@@ -487,7 +487,7 @@ $comentarios = $articulo['comentarios'] ?? [];
                     return;
                 }
                 const canvas = document.createElement('canvas');
-                const maxDim = 1200;
+                const maxDim = 800;
                 let w = imgElement.naturalWidth;
                 let h = imgElement.naturalHeight;
                 if (w > maxDim || h > maxDim) {
@@ -517,24 +517,14 @@ $comentarios = $articulo['comentarios'] ?? [];
         });
     }
 
-    // COMPARTIR ADJUNTANDO LA FOTOGRAFÍA FÍSICA + TÍTULO + RESUMEN + ENLACE
+    // COMPARTIR ENLACE LIMPIO PARA TARJETA OPEN GRAPH + RESPALDO DE COPIA CON TÍTULO Y RESUMEN
     async function compartirPaginaConFoto() {
         const textoFormateado = `*${datosCompartir.titulo}*\n\n${datosCompartir.resumen}\n\n${datosCompartir.url}`;
 
         if (navigator.share) {
             try {
-                const archivoFoto = await obtenerArchivoDesdeHero();
-                if (archivoFoto && navigator.canShare && navigator.canShare({ files: [archivoFoto] })) {
-                    await navigator.share({
-                        files: [archivoFoto],
-                        title: datosCompartir.titulo,
-                        text: textoFormateado
-                    });
-                    return;
-                }
                 await navigator.share({
                     title: datosCompartir.titulo,
-                    text: `${datosCompartir.titulo} — ${datosCompartir.resumen}`,
                     url: datosCompartir.url
                 });
                 return;

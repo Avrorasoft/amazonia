@@ -776,7 +776,7 @@ $url_base_portal = $protocolo . $host . ($base_dir !== '' ? $base_dir : '');
         }).catch(() => {});
     }
 
-    // Convierte la imagen ya cargada en el DOM a un archivo JPG comprimido en milisegundos
+    // Convierte la imagen ya cargada en el DOM a un archivo JPG mediano comprimido en milisegundos
     function obtenerArchivoDesdeImgDOM(imgElement) {
         return new Promise((resolve) => {
             try {
@@ -785,7 +785,7 @@ $url_base_portal = $protocolo . $host . ($base_dir !== '' ? $base_dir : '');
                     return;
                 }
                 const canvas = document.createElement('canvas');
-                const maxDim = 1200;
+                const maxDim = 800;
                 let w = imgElement.naturalWidth;
                 let h = imgElement.naturalHeight;
                 if (w > maxDim || h > maxDim) {
@@ -815,31 +815,17 @@ $url_base_portal = $protocolo . $host . ($base_dir !== '' ? $base_dir : '');
         });
     }
 
-    // COMPARTIR CON FOTO FÍSICA ADJUNTA + TÍTULO + RESUMEN + ENLACE (IGUAL QUE PORTAL-IA-WEB.WEB.APP)
+    // COMPARTIR ENLACE LIMPIO PARA TARJETA OPEN GRAPH + RESPALDO DE COPIA CON TÍTULO Y RESUMEN
     async function compartirConFotoReal(btn) {
-        const id = btn.getAttribute('data-id');
         const url = btn.getAttribute('data-url');
         const titulo = btn.getAttribute('data-titulo');
         const resumen = btn.getAttribute('data-resumen');
         const textoFormateado = `*${titulo}*\n\n${resumen}\n\n${url}`;
 
-        const imgEl = document.getElementById(`img-art-${id}`);
-
         if (navigator.share) {
             try {
-                const archivoFoto = await obtenerArchivoDesdeImgDOM(imgEl);
-                if (archivoFoto && navigator.canShare && navigator.canShare({ files: [archivoFoto] })) {
-                    await navigator.share({
-                        files: [archivoFoto],
-                        title: titulo,
-                        text: textoFormateado
-                    });
-                    return;
-                }
-                // Si el dispositivo no soporta archivos adjuntos, comparte texto + enlace
                 await navigator.share({
                     title: titulo,
-                    text: `${titulo} — ${resumen}`,
                     url: url
                 });
                 return;
