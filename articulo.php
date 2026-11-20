@@ -1,7 +1,5 @@
 <?php
-// articulo.php - Inmersión Total con Envío de Fotografía Adjunta Real en Redes Sociales, Reacciones Instantáneas (0ms), Audio, Pin y Comentarios
-$id = isset($_GET['id']) ? $_GET['id'] : '';
-
+// articulo.php - Vista de Inmersión Total (Foto Fija a la Izquierda en PC / Scroll Natural en Móvil, Voz, Reacciones 0ms, Comentarios y Compartido Unificado)
 $archivo_json = __DIR__ . '/articulos.json';
 $articulos = [];
 
@@ -10,11 +8,13 @@ if (file_exists($archivo_json)) {
     $articulos = json_decode($contenido, true) ?: [];
 }
 
-// API AJAX interna para procesar reacciones sin recargar en la inmersión total
+$id_actual = $_GET['id'] ?? '';
+
+// API AJAX para reacciones instantáneas (0ms en cliente, persistencia en servidor)
 if (isset($_GET['ajax_reaccionar']) && isset($_GET['id']) && isset($_GET['tipo'])) {
     header('Content-Type: application/json');
-    $tipo = $_GET['tipo']; // 'like' o 'sad'
-    $previo = $_GET['previo'] ?? ''; 
+    $tipo = $_GET['tipo'];
+    $previo = $_GET['previo'] ?? '';
     $id_art = $_GET['id'];
     $encontrado = false;
     $likes = 0;
@@ -24,26 +24,17 @@ if (isset($_GET['ajax_reaccionar']) && isset($_GET['id']) && isset($_GET['tipo']
     foreach ($articulos as &$a) {
         if (strval($a['id']) === strval($id_art)) {
             if ($previo === $tipo) {
-                if ($tipo === 'like') {
-                    $a['likes'] = max(0, intval($a['likes'] ?? 0) - 1);
-                } elseif ($tipo === 'sad') {
-                    $a['sads'] = max(0, intval($a['sads'] ?? 0) - 1);
-                }
+                if ($tipo === 'like') $a['likes'] = max(0, intval($a['likes'] ?? 0) - 1);
+                if ($tipo === 'sad') $a['sads'] = max(0, intval($a['sads'] ?? 0) - 1);
                 $nuevo_estado = '';
             } else {
-                if ($previo === 'like') {
-                    $a['likes'] = max(0, intval($a['likes'] ?? 0) - 1);
-                } elseif ($previo === 'sad') {
-                    $a['sads'] = max(0, intval($a['sads'] ?? 0) - 1);
-                }
-                if ($tipo === 'like') {
-                    $a['likes'] = intval($a['likes'] ?? 0) + 1;
-                } elseif ($tipo === 'sad') {
-                    $a['sads'] = intval($a['sads'] ?? 0) + 1;
-                }
+                if ($previo === 'like') $a['likes'] = max(0, intval($a['likes'] ?? 0) - 1);
+                if ($previo === 'sad') $a['sads'] = max(0, intval($a['sads'] ?? 0) - 1);
+
+                if ($tipo === 'like') $a['likes'] = intval($a['likes'] ?? 0) + 1;
+                if ($tipo === 'sad') $a['sads'] = intval($a['sads'] ?? 0) + 1;
                 $nuevo_estado = $tipo;
             }
-            
             $likes = intval($a['likes'] ?? 0);
             $sads = intval($a['sads'] ?? 0);
             $encontrado = true;
@@ -53,99 +44,101 @@ if (isset($_GET['ajax_reaccionar']) && isset($_GET['id']) && isset($_GET['tipo']
     unset($a);
 
     if ($encontrado) {
-        file_put_contents($archivo_json, json_encode($articulos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-        echo json_encode([
-            'status' => 'success', 
-            'likes' => $likes, 
-            'sads' => $sads, 
-            'nuevo_estado' => $nuevo_estado
-        ]);
+        file_put_contents($archivo_json, json_encode($articulos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+        echo json_encode(['status' => 'success', 'likes' => $likes, 'sads' => $sads, 'nuevo_estado' => $nuevo_estado]);
     } else {
         echo json_encode(['status' => 'error']);
     }
     exit;
 }
 
-// Manejo de envío de comentarios locales por POST
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nuevo_comentario'])) {
-    $autor_comentario = trim($_POST['autor'] ?? 'Anónimo');
-    $texto_comentario = trim($_POST['comentario'] ?? '');
+// API AJAX para agregar comentarios con bloqueo seguro
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['ajax_comentar']) && isset($_POST['id'])) {
+    header('Content-Type: application/json');
+    $id_art = $_POST['id'];
+    $autor = trim($_POST['autor'] ?? 'Lector');
+    $texto = trim($_POST['comentario'] ?? '');
 
-    if ($texto_comentario !== '') {
-        foreach ($articulos as &$art) {
-            if (strval($art['id']) === strval($id)) {
-                if (!isset($art['comentarios'])) {
-                    $art['comentarios'] = [];
-                }
-                array_unshift($art['comentarios'], [
-                    'autor' => ($autor_comentario !== '' ? $autor_comentario : 'Anónimo'),
-                    'fecha' => date('Y-m-d H:i'),
-                    'texto' => $texto_comentario
-                ]);
-                break;
-            }
-        }
-        unset($art);
-        file_put_contents($archivo_json, json_encode($articulos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-        header("Location: articulo.php?id=" . urlencode($id));
+    if ($autor === '') $autor = 'Lector';
+    if ($texto === '') {
+        echo json_encode(['status' => 'error', 'msg' => 'El comentario no puede estar vacío.']);
         exit;
     }
+
+    $encontrado = false;
+    $nuevo_comentario = [
+        'autor' => mb_substr($autor, 0, 60, 'UTF-8'),
+        'texto' => mb_substr($texto, 0, 1000, 'UTF-8'),
+        'fecha' => date('Y-m-d H:i')
+    ];
+
+    foreach ($articulos as &$a) {
+        if (strval($a['id']) === strval($id_art)) {
+            if (!isset($a['comentarios']) || !is_array($a['comentarios'])) {
+                $a['comentarios'] = [];
+            }
+            $a['comentarios'][] = $nuevo_comentario;
+            $encontrado = true;
+            break;
+        }
+    }
+    unset($a);
+
+    if ($encontrado) {
+        file_put_contents($archivo_json, json_encode($articulos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+        echo json_encode(['status' => 'success', 'comentario' => $nuevo_comentario]);
+    } else {
+        echo json_encode(['status' => 'error', 'msg' => 'Artículo no encontrado.']);
+    }
+    exit;
 }
 
+// Buscar artículo activo
 $articulo = null;
 foreach ($articulos as $art) {
-    if (strval($art['id']) === strval($id)) {
+    if ((!isset($art['eliminado']) || $art['eliminado'] !== true) && strval($art['id']) === strval($id_actual)) {
         $articulo = $art;
         break;
     }
 }
 
-if (!$articulo || (isset($articulo['eliminado']) && $articulo['eliminado'] === true)) {
+if (!$articulo) {
     header("Location: index.php");
     exit;
 }
 
-// Datos limpios del artículo
 $titulo_raw = trim($articulo['titulo'] ?? 'Artículo');
+$subtitulo_raw = trim($articulo['subtitulo'] ?? '');
 $resumen_raw = trim($articulo['resumen'] ?? '');
-if ($resumen_raw === '') {
-    $resumen_raw = mb_substr(strip_tags($articulo['contenido_completo'] ?? ''), 0, 200) . '...';
+$contenido_raw = trim($articulo['contenido_completo'] ?? '');
+$texto_lectura = ($contenido_raw !== '') ? $contenido_raw : $resumen_raw;
+
+// Limpieza de descripción para meta description y og:description
+$desc_fuente = ($resumen_raw !== '') ? $resumen_raw : $texto_lectura;
+$desc_limpia = trim(preg_replace('/\s+/u', ' ', $desc_fuente));
+$meta_desc_180 = mb_substr($desc_limpia, 0, 180, 'UTF-8');
+$og_desc_200   = mb_substr($desc_limpia, 0, 200, 'UTF-8');
+
+$categoria_raw = mb_strtoupper(trim($articulo['categoria'] ?? 'NOTICIA'), 'UTF-8');
+if ($categoria_raw === '') $categoria_raw = 'NOTICIA';
+
+$fecha_raw = trim($articulo['fecha'] ?? '');
+$fuente_raw = trim($articulo['fuente'] ?? '');
+
+$img_rel = trim($articulo['imagen'] ?? '');
+if ($img_rel === '' || !file_exists(__DIR__ . '/' . $img_rel)) {
+    $img_rel = 'images/default.jpg';
 }
 
-$titulo = htmlspecialchars($titulo_raw, ENT_QUOTES, 'UTF-8');
-$resumen_meta = htmlspecialchars(mb_substr($resumen_raw, 0, 220), ENT_QUOTES, 'UTF-8');
-$categoria = htmlspecialchars($articulo['categoria'] ?? 'NOTICIA', ENT_QUOTES, 'UTF-8');
-
-// Validar imagen física y obtener sus dimensiones medianas estándar para vista previa en redes
-$img_path = ltrim(trim($articulo['imagen'] ?? ''), '/');
-$ruta_fisica_img = __DIR__ . '/' . $img_path;
-
-if ($img_path !== '' && file_exists($ruta_fisica_img)) {
-    $imagen_relativa = $img_path;
-} else {
-    $imagen_relativa = 'images/default.jpg';
-    $ruta_fisica_img = __DIR__ . '/images/default.jpg';
-}
-
-$imagen = htmlspecialchars($imagen_relativa, ENT_QUOTES, 'UTF-8');
-
-// Detectar dimensiones medianas (800x420 a 1200x630) y tipo MIME para WhatsApp, Facebook y Telegram
-$img_width = 800;
-$img_height = 420;
 $img_mime = 'image/jpeg';
-
+$ruta_fisica_img = __DIR__ . '/' . $img_rel;
 if (file_exists($ruta_fisica_img)) {
     $info_img = @getimagesize($ruta_fisica_img);
     if ($info_img !== false) {
-        $img_width = max(800, min(1200, intval($info_img[0])));
-        $img_height = max(420, min(630, intval($info_img[1])));
-        if (!empty($info_img['mime'])) {
-            $img_mime = $info_img['mime'];
-        }
+        $img_mime = $info_img['mime'] ?? 'image/jpeg';
     }
 }
 
-// Detección estricta de protocolo y host compatible con túneles y servidores de producción
 $es_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') 
     || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443) 
     || (isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
@@ -153,221 +146,728 @@ $es_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
 $protocolo = $es_https ? "https://" : "http://";
 $host = $_SERVER['HTTP_HOST'] ?? 'localhost:8000';
 $base_dir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'])), '/');
+$url_base_portal = $protocolo . $host . ($base_dir !== '' ? $base_dir : '');
+$url_canonica = $url_base_portal . '/articulo.php?id=' . rawurlencode(strval($articulo['id']));
+$url_imagen_og = $url_base_portal . '/' . ltrim($img_rel, '/');
 
-$segmentos_img = explode('/', $imagen_relativa);
-$segmentos_codificados = array_map('rawurlencode', $segmentos_img);
-$ruta_img_codificada = implode('/', $segmentos_codificados);
-
-$url_imagen_absoluta = $protocolo . $host . ($base_dir !== '' ? $base_dir : '') . '/' . $ruta_img_codificada;
-$url_actual = $protocolo . $host . ($base_dir !== '' ? $base_dir : '') . '/articulo.php?id=' . rawurlencode($id);
-
-$texto_plano_voz = strip_tags($articulo['contenido_completo'] ?? $articulo['resumen'] ?? '');
-$contenido_completo = nl2br(htmlspecialchars($articulo['contenido_completo'] ?? $articulo['resumen'] ?? '', ENT_QUOTES, 'UTF-8'));
-$fecha = htmlspecialchars($articulo['fecha'] ?? '', ENT_QUOTES, 'UTF-8');
-$fuente = htmlspecialchars($articulo['fuente'] ?? '', ENT_QUOTES, 'UTF-8');
 $likes = intval($articulo['likes'] ?? 0);
 $sads = intval($articulo['sads'] ?? 0);
-$comentarios = $articulo['comentarios'] ?? [];
+$comentarios = is_array($articulo['comentarios'] ?? null) ? $articulo['comentarios'] : [];
 ?>
 <!DOCTYPE html>
 <html lang="es" prefix="og: https://ogp.me/ns#">
 <head>
     <meta charset="UTF-8">
-    <title><?php echo $titulo; ?> | Portal Amazonía</title>
+    <title><?php echo htmlspecialchars($titulo_raw, ENT_QUOTES, 'UTF-8'); ?> | Portal Amazonía</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="<?php echo $resumen_meta; ?>">
+    <meta name="description" content="<?php echo htmlspecialchars($meta_desc_180, ENT_QUOTES, 'UTF-8'); ?>">
 
-    <!-- OPEN GRAPH EXTENDIDO PARA WHATSAPP, FACEBOOK, INSTAGRAM Y TELEGRAM (VISTA PREVIA MEDIANA) -->
-    <meta property="og:site_name" content="Portal Amazonía | Vanguardia y Territorio">
-    <meta property="og:locale" content="es_BO">
+    <!-- Metatags Open Graph compactos (300x200 + summary) para tarjeta unificada de foto + texto -->
+    <meta property="og:site_name" content="Portal Amazonía">
+    <meta property="og:title" content="<?php echo htmlspecialchars($titulo_raw, ENT_QUOTES, 'UTF-8'); ?>">
+    <meta property="og:description" content="<?php echo htmlspecialchars($og_desc_200, ENT_QUOTES, 'UTF-8'); ?>">
     <meta property="og:type" content="article">
-    <meta property="og:title" content="<?php echo $titulo; ?>">
-    <meta property="og:description" content="<?php echo $resumen_meta; ?>">
-    <meta property="og:url" content="<?php echo htmlspecialchars($url_actual, ENT_QUOTES, 'UTF-8'); ?>">
-    <meta property="og:image" content="<?php echo htmlspecialchars($url_imagen_absoluta, ENT_QUOTES, 'UTF-8'); ?>">
-    <meta property="og:image:secure_url" content="<?php echo htmlspecialchars($url_imagen_absoluta, ENT_QUOTES, 'UTF-8'); ?>">
+    <meta property="og:url" content="<?php echo htmlspecialchars($url_canonica, ENT_QUOTES, 'UTF-8'); ?>">
+    <meta property="og:image" content="<?php echo htmlspecialchars($url_imagen_og, ENT_QUOTES, 'UTF-8'); ?>">
     <meta property="og:image:type" content="<?php echo htmlspecialchars($img_mime, ENT_QUOTES, 'UTF-8'); ?>">
-    <meta property="og:image:width" content="<?php echo $img_width; ?>">
-    <meta property="og:image:height" content="<?php echo $img_height; ?>">
-    <meta property="og:image:alt" content="<?php echo $titulo; ?>">
-    <meta property="article:section" content="<?php echo $categoria; ?>">
-
-    <!-- TWITTER / X / TELEGRAM LARGE SUMMARY CARD -->
-    <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="<?php echo $titulo; ?>">
-    <meta name="twitter:description" content="<?php echo $resumen_meta; ?>">
-    <meta name="twitter:image" content="<?php echo htmlspecialchars($url_imagen_absoluta, ENT_QUOTES, 'UTF-8'); ?>">
-    <meta name="twitter:image:alt" content="<?php echo $titulo; ?>">
-
-    <link rel="image_src" href="<?php echo htmlspecialchars($url_imagen_absoluta, ENT_QUOTES, 'UTF-8'); ?>">
+    <meta property="og:image:width" content="300">
+    <meta property="og:image:height" content="200">
+    <meta name="twitter:card" content="summary">
 
     <style>
-        :root { --vibrant-green: #1D9A4C; --accent-gold: #FFB81C; --dark-bg: #121212; --panel-bg: #1e1e1e; --text-main: #E0E0E0; }
-        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body { font-family: 'Segoe UI', Roboto, sans-serif; background-color: var(--dark-bg); color: var(--text-main); margin: 0; padding: 0; -webkit-text-size-adjust: 100%; }
-        a, button { touch-action: manipulation; }
-        
-        .lectura-container { max-width: 1100px; margin: 20px auto; background: #111111; border: 1px solid #333; border-radius: 8px; box-shadow: 0 10px 40px rgba(0,0,0,0.9); }
-        .lectura-header { padding: 15px 25px; border-bottom: 1px solid #222; display: flex; justify-content: space-between; align-items: center; background: #0c0c0c; border-top-left-radius: 8px; border-top-right-radius: 8px; }
-        .btn-volver { color: var(--accent-gold); text-decoration: none; font-weight: bold; font-size: 13px; padding: 6px 0; }
-        .btn-volver:hover { color: white; }
-
-        .lectura-layout { display: flex; flex-direction: column; position: relative; align-items: flex-start; }
-        
-        @media (min-width: 900px) {
-            .lectura-layout { display: grid; grid-template-columns: 45% 55%; }
-            .lectura-hero-container { padding: 30px; background: #111111; width: 100%; box-sizing: border-box; }
-            .lectura-hero-container.pinned { position: sticky; top: 20px; align-self: start; }
+        :root {
+            --vibrant-green: #1D9A4C;
+            --accent-gold: #FFB81C;
+            --dark-bg: #111111;
+            --panel-bg: #1a1a1a;
+            --text-main: #E6E6E6;
+        }
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+        body {
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--dark-bg);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            overflow-x: hidden;
+            -webkit-text-size-adjust: 100%;
         }
 
-        .lectura-hero-container { padding: 20px; background: #080808; text-align: center; position: relative; width: 100%; }
-        .lectura-hero { width: 100%; max-height: 75vh; object-fit: contain; border-radius: 6px; box-shadow: 0 4px 20px rgba(0,0,0,0.8); background: #000; border: 1px solid rgba(255,255,255,0.1); }
-        
-        .btn-pin { position: absolute; top: 35px; right: 35px; background: rgba(0,0,0,0.7); color: #aaa; border: 1px solid #555; border-radius: 50%; width: 40px; height: 40px; font-size: 16px; cursor: pointer; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); transition: all 0.2s; z-index: 10; }
-        .btn-pin:hover { background: rgba(0,0,0,0.9); color: white; }
-        .btn-pin.activo { background: var(--accent-gold); color: black; border-color: var(--accent-gold); }
+        /* BARRA DE NAVEGACIÓN SUPERIOR */
+        nav {
+            position: sticky;
+            top: 0;
+            background: rgba(10, 10, 10, 0.96);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 1000;
+            border-bottom: 1px solid #282828;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.65);
+        }
+        .nav-inner {
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: 11px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .btn-volver-portal {
+            color: var(--accent-gold);
+            text-decoration: none;
+            font-weight: 800;
+            font-size: 13px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border: 1px solid rgba(255, 184, 28, 0.45);
+            border-radius: 5px;
+            transition: background 0.15s, color 0.15s;
+        }
+        .btn-volver-portal:hover {
+            background: var(--accent-gold);
+            color: #000;
+        }
+        .nav-marca {
+            font-size: 12px;
+            font-weight: 900;
+            letter-spacing: 1.5px;
+            color: #aaa;
+            text-transform: uppercase;
+        }
 
-        .lectura-body { padding: 25px; width: 100%; box-sizing: border-box; }
-        .lectura-body h1 { color: white; font-size: clamp(22px, 3vw, 34px); font-weight: 900; line-height: 1.25; margin-top: 0; margin-bottom: 15px; }
-        .lectura-meta { font-size: 12px; color: var(--accent-gold); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 15px; display: block; }
-        
-        .reproductor-box { display: flex; align-items: center; gap: 12px; background: #1a1a1a; border: 1px solid #333; padding: 10px 16px; border-radius: 6px; margin-bottom: 25px; }
-        .btn-play { background: var(--vibrant-green); color: white; border: none; border-radius: 50%; width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; font-size: 16px; cursor: pointer; transition: 0.15s; flex-shrink: 0; }
-        .btn-play:hover { background: var(--accent-gold); color: black; }
-        .reproductor-info { font-size: 13px; color: #aaa; font-weight: bold; }
+        /* CONTENEDOR PRINCIPAL DE DOS COLUMNAS EN PC (FOTO IZQUIERDA / TEXTO DERECHA) */
+        .articulo-layout {
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: 24px 20px 60px 20px;
+            display: flex;
+            flex-direction: row;
+            align-items: flex-start;
+            gap: 32px;
+        }
 
-        .lectura-texto { font-size: 17px; line-height: 1.8; color: #ddd; text-align: justify; hyphens: auto; -webkit-hyphens: auto; }
+        /* COLUMNA IZQUIERDA EN PC: FOTO FIJA (STICKY) VISIBLE DURANTE TODA LA LECTURA */
+        .columna-foto-izquierda {
+            flex: 0 0 40%;
+            max-width: 480px;
+            position: sticky;
+            top: 68px;
+            z-index: 20;
+        }
+        .hero-foto-marco {
+            width: 100%;
+            border-radius: 10px;
+            overflow: hidden;
+            background: #080808;
+            border: 1px solid #2e2e2e;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.8);
+        }
+        .hero-foto-img {
+            width: 100%;
+            max-height: calc(100vh - 110px);
+            object-fit: cover;
+            object-position: center 20%;
+            display: block;
+        }
+        .pie-foto-izquierda {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #999;
+            line-height: 1.45;
+            padding: 0 2px;
+        }
 
-        .acciones-superiores { display: flex; justify-content: flex-start; align-items: center; margin-top: 30px; padding-top: 20px; border-top: 1px solid #222; flex-wrap: wrap; gap: 8px; }
-        .btn-compartir { background: var(--accent-gold); color: black; border: none; padding: 10px 16px; border-radius: 6px; font-weight: 900; cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; transition: transform 0.1s, background 0.15s; }
-        .btn-compartir:active { transform: scale(0.97); }
-        .btn-compartir:hover { background: white; }
+        /* COLUMNA DERECHA EN PC: LECTURA LIMPIA */
+        .columna-texto-derecha {
+            flex: 1 1 60%;
+            min-width: 0;
+        }
 
-        .btn-red-social { background: #222; color: white; border: 1px solid #444; padding: 10px 14px; border-radius: 6px; font-weight: bold; font-size: 12px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; transition: 0.15s; }
-        .btn-red-social.fb:hover { background: #1877F2; border-color: #1877F2; }
-        .btn-red-social.x:hover { background: #000; border-color: #000; }
-        .btn-red-social.tiktok:hover { background: #FE2C55; border-color: #FE2C55; }
-        
-        .reacciones-footer { display: flex; gap: 10px; width: 100%; margin-top: 15px; }
-        .btn-reaccion { background: #1e1e1e; border: 1px solid #444; color: #ccc; border-radius: 6px; padding: 10px 15px; font-size: 14px; font-weight: bold; cursor: pointer; display: flex; align-items: center; gap: 8px; flex-grow: 1; justify-content: center; transition: transform 0.08s, background 0.12s; user-select: none; }
-        .btn-reaccion:active { transform: scale(0.94); }
-        .btn-reaccion:hover { border-color: var(--accent-gold); color: white; background: rgba(255,184,28,0.1); }
-        .btn-reaccion.seleccionado { background: var(--accent-gold); color: black; border-color: var(--accent-gold); }
+        /* EN TELÉFONO: UNA SOLA COLUMNA Y LA FOTO VA CON EL SCROLL NATURAL */
+        @media (max-width: 768px) {
+            .articulo-layout {
+                flex-direction: column;
+                padding: 14px 14px 48px 14px;
+                gap: 16px;
+            }
+            .columna-foto-izquierda {
+                position: static;
+                flex: none;
+                width: 100%;
+                max-width: 100%;
+            }
+            .hero-foto-img {
+                max-height: 300px;
+            }
+            .columna-texto-derecha {
+                width: 100%;
+            }
+        }
 
-        .seccion-comentarios { margin-top: 30px; border-top: 1px solid #333; padding: 25px; grid-column: 1 / -1; }
-        .seccion-comentarios h3 { color: var(--accent-gold); font-size: 20px; margin-bottom: 20px; }
-        .form-comentario { display: flex; flex-direction: column; gap: 12px; margin-bottom: 30px; }
-        .input-comentario { background: var(--panel-bg); border: 1px solid #444; color: white; padding: 12px; border-radius: 6px; font-family: inherit; font-size: 14px; box-sizing: border-box; width: 100%; }
-        .input-comentario:focus { outline: none; border-color: var(--vibrant-green); }
-        .btn-enviar { align-self: flex-end; background: var(--vibrant-green); color: white; border: none; padding: 10px 25px; font-weight: bold; border-radius: 6px; cursor: pointer; }
-        .btn-enviar:hover { background: #147037; }
-        .comentario-item { background: #1a1a1a; padding: 15px; border-radius: 6px; margin-bottom: 15px; border-left: 3px solid var(--accent-gold); }
-        .comentario-autor { font-weight: bold; color: white; font-size: 14px; margin-bottom: 4px; }
-        .comentario-fecha { font-size: 11px; color: #888; margin-bottom: 8px; }
-        .comentario-texto { color: #ccc; font-size: 15px; margin: 0; line-height: 1.5; text-align: justify; }
+        /* CABECERA Y CUERPO DE LECTURA */
+        .meta-fila {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .badge-cat {
+            background: var(--accent-gold);
+            color: #000;
+            font-weight: 900;
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+        .meta-texto {
+            font-size: 12px;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+        h1.titulo-articulo {
+            margin: 0 0 10px 0;
+            font-size: clamp(24px, 3.6vw, 38px);
+            line-height: 1.2;
+            color: #ffffff;
+            font-weight: 900;
+        }
+        .subtitulo-articulo {
+            margin: 0 0 16px 0;
+            font-size: clamp(16px, 2.2vw, 20px);
+            color: var(--accent-gold);
+            font-weight: 600;
+            line-height: 1.4;
+        }
 
-        /* NOTIFICACIÓN FLOTANTE INSTANTÁNEA (TOAST) */
+        /* BARRA DE HERRAMIENTAS: VOZ Y UN SOLO BOTÓN COMPARTIR */
+        .herramientas-lectura {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0;
+            margin-bottom: 20px;
+            border-top: 1px solid #262626;
+            border-bottom: 1px solid #262626;
+        }
+        .btn-voz {
+            background: #1b1b1b;
+            color: var(--accent-gold);
+            border: 1px solid var(--accent-gold);
+            padding: 9px 16px;
+            border-radius: 20px;
+            font-size: 13.5px;
+            font-weight: 800;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: background 0.15s, color 0.15s;
+        }
+        .btn-voz:hover {
+            background: var(--accent-gold);
+            color: #000;
+        }
+        .btn-compartir-unico {
+            background: var(--vibrant-green);
+            color: #fff;
+            border: none;
+            padding: 9px 18px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 800;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            transition: background 0.15s;
+        }
+        .btn-compartir-unico:hover {
+            background: #17803e;
+        }
+
+        /* TEXTO JUSTIFICADO DE ALTA LEGIBILIDAD */
+        .cuerpo-lectura {
+            font-size: 18px;
+            line-height: 1.85;
+            color: #E2E2E2;
+            text-align: justify;
+            hyphens: auto;
+            -webkit-hyphens: auto;
+        }
+        .cuerpo-lectura p {
+            margin: 0 0 22px 0;
+        }
+        .resumen-destacado {
+            background: #171717;
+            border-left: 4px solid var(--accent-gold);
+            padding: 14px 18px;
+            border-radius: 0 6px 6px 0;
+            margin-bottom: 24px;
+            font-size: 16.5px;
+            line-height: 1.65;
+            color: #d6d6d6;
+            text-align: justify;
+        }
+
+        /* REACCIONES INSTANTÁNEAS MÁS GRANDES Y VISIBLES */
+        .seccion-reacciones {
+            margin-top: 32px;
+            padding: 18px;
+            background: #171717;
+            border: 1px solid #2b2b2b;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .seccion-reacciones span.label-reac {
+            font-weight: 800;
+            font-size: 15px;
+            color: #e6e6e6;
+        }
+        .botones-reaccion-grupo {
+            display: flex;
+            gap: 12px;
+        }
+        .btn-reaccion {
+            background: #222;
+            border: 1px solid #484848;
+            color: #efefef;
+            border-radius: 8px;
+            padding: 11px 20px;
+            font-size: 17px;
+            font-weight: 800;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: transform 0.08s, background 0.15s, color 0.15s;
+        }
+        .btn-reaccion .emoji-reac {
+            font-size: 21px;
+            line-height: 1;
+        }
+        .btn-reaccion:active {
+            transform: scale(0.95);
+        }
+        .btn-reaccion.seleccionado {
+            background: var(--accent-gold);
+            color: #000;
+            border-color: var(--accent-gold);
+        }
+
+        /* SECCIÓN DE COMENTARIOS */
+        .seccion-comentarios {
+            margin-top: 34px;
+            padding-top: 24px;
+            border-top: 1px solid #2b2b2b;
+        }
+        .seccion-comentarios h3 {
+            margin: 0 0 16px 0;
+            font-size: 19px;
+            color: var(--accent-gold);
+        }
+        .form-comentario {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: #171717;
+            padding: 16px;
+            border-radius: 8px;
+            border: 1px solid #2b2b2b;
+            margin-bottom: 22px;
+        }
+        .input-com {
+            width: 100%;
+            background: #101010;
+            border: 1px solid #353535;
+            color: #fff;
+            padding: 10px 12px;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 14px;
+        }
+        .input-com:focus {
+            outline: none;
+            border-color: var(--accent-gold);
+        }
+        .btn-enviar-com {
+            align-self: flex-start;
+            background: var(--accent-gold);
+            color: #000;
+            border: none;
+            padding: 10px 18px;
+            border-radius: 6px;
+            font-weight: 900;
+            font-size: 13px;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+        .btn-enviar-com:hover {
+            background: #fff;
+        }
+        .lista-comentarios {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .item-comentario {
+            background: #161616;
+            border: 1px solid #282828;
+            border-radius: 6px;
+            padding: 12px 14px;
+        }
+        .item-comentario-head {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--accent-gold);
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .item-comentario-head span.fecha-com {
+            color: #777;
+            font-weight: normal;
+        }
+        .item-comentario p {
+            margin: 0;
+            font-size: 14.5px;
+            line-height: 1.55;
+            color: #ddd;
+        }
+
+        /* MODAL UNIFICADO DE COMPARTIR */
+        .modal-compartir-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.88);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            z-index: 5000;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+        .modal-compartir-overlay.abierto {
+            display: flex;
+        }
+        .modal-compartir-caja {
+            background: #161616;
+            border: 1px solid #353535;
+            border-radius: 12px;
+            width: 100%;
+            max-width: 470px;
+            padding: 18px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.95);
+        }
+        .modal-compartir-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .modal-compartir-header h4 {
+            margin: 0;
+            color: var(--accent-gold);
+            font-size: 15px;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+        .btn-cerrar-compartir {
+            background: #262626;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn-cerrar-compartir:hover {
+            background: var(--accent-gold);
+            color: #000;
+        }
+        .tarjeta-previa-compartir {
+            display: flex;
+            gap: 12px;
+            background: #0e0e0e;
+            border: 1px solid #2e2e2e;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 14px;
+            align-items: center;
+        }
+        .tarjeta-previa-compartir img {
+            width: 96px;
+            height: 96px;
+            object-fit: cover;
+            border-radius: 6px;
+            flex-shrink: 0;
+            background: #000;
+        }
+        .tarjeta-previa-info {
+            min-width: 0;
+            flex: 1;
+        }
+        .tarjeta-previa-info strong {
+            display: block;
+            color: #fff;
+            font-size: 13.5px;
+            line-height: 1.3;
+            margin-bottom: 4px;
+        }
+        .tarjeta-previa-info p {
+            margin: 0;
+            font-size: 12px;
+            color: #bbb;
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .grid-redes-compartir {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+        .btn-red-opcion {
+            background: #212121;
+            color: #fff;
+            border: 1px solid #383838;
+            border-radius: 6px;
+            padding: 10px 12px;
+            font-size: 13px;
+            font-weight: 700;
+            cursor: pointer;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 7px;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .btn-red-opcion:hover {
+            border-color: var(--accent-gold);
+            background: #2b2b2b;
+        }
+        .btn-red-opcion.wa { border-left: 4px solid #25D366; }
+        .btn-red-opcion.fb { border-left: 4px solid #1877F2; }
+        .btn-red-opcion.ig { border-left: 4px solid #E1306C; }
+        .btn-red-opcion.tg { border-left: 4px solid #26A5E4; }
+        .btn-red-opcion.xx { border-left: 4px solid #ffffff; }
+        .btn-red-opcion.tk { border-left: 4px solid #FE2C55; }
+        .btn-red-opcion.li { border-left: 4px solid #0A66C2; }
+        .btn-red-opcion.em { border-left: 4px solid #FFB81C; }
+        .btn-red-opcion.nativo {
+            grid-column: span 2;
+            background: var(--vibrant-green);
+            border-color: var(--vibrant-green);
+            color: #fff;
+        }
+        .btn-red-opcion.copiar {
+            grid-column: span 2;
+            background: var(--accent-gold);
+            border-color: var(--accent-gold);
+            color: #000;
+            font-weight: 900;
+        }
+
+        /* TOAST FLOTANTE */
         #toast-notificacion {
             position: fixed;
-            bottom: 24px;
+            bottom: 22px;
             left: 50%;
             transform: translateX(-50%) translateY(100px);
             background: var(--accent-gold);
             color: #000;
             font-weight: 800;
             font-size: 13px;
-            padding: 12px 22px;
+            padding: 11px 20px;
             border-radius: 30px;
-            box-shadow: 0 8px 25px rgba(0,0,0,0.8);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.85);
             z-index: 9999;
             opacity: 0;
             pointer-events: none;
             transition: transform 0.22s ease, opacity 0.22s ease;
-            text-align: center;
-            max-width: 90vw;
         }
         #toast-notificacion.mostrar {
             transform: translateX(-50%) translateY(0);
             opacity: 1;
         }
+
+        @media (max-width: 768px) {
+            .cuerpo-lectura {
+                font-size: 16.5px;
+                line-height: 1.7;
+            }
+        }
     </style>
 </head>
 <body>
 
-<div class="lectura-container">
-    <div class="lectura-header">
-        <a href="index.php" class="btn-volver">← Volver al Mosaico</a>
-        <span style="font-size:11px; color:#888; text-transform:uppercase;">Inmersión Total</span>
+<nav>
+    <div class="nav-inner">
+        <a href="index.php" class="btn-volver-portal">← Volver al Portal</a>
+        <span class="nav-marca">PORTAL AMAZONÍA</span>
     </div>
+</nav>
 
-    <div class="lectura-layout">
-        <!-- FOTOGRAFÍA CON PIN -->
-        <div class="lectura-hero-container" id="heroContainer">
-            <button class="btn-pin" id="btnPin" onclick="togglePin()" title="Clavar o desclavar foto">📌</button>
-            <img src="<?php echo $imagen; ?>" id="heroImagenArticulo" class="lectura-hero" alt="<?php echo $titulo; ?>" decoding="async" onerror="this.onerror=null; this.src='images/default.jpg';">
+<main class="articulo-layout">
+    <!-- COSTADO IZQUIERDO EN PC (STICKY SIEMPRE VISIBLE) / ARRIBA CON SCROLL EN TELÉFONO -->
+    <aside class="columna-foto-izquierda">
+        <div class="hero-foto-marco">
+            <img src="<?php echo htmlspecialchars($img_rel, ENT_QUOTES, 'UTF-8'); ?>"
+                 id="imgPrincipalArticulo"
+                 class="hero-foto-img"
+                 alt="<?php echo htmlspecialchars($titulo_raw, ENT_QUOTES, 'UTF-8'); ?>"
+                 onerror="this.onerror=null; this.src='images/default.jpg';">
         </div>
-
-        <!-- CONTENIDO Y AUDIO -->
-        <div class="lectura-body">
-            <span class="lectura-meta"><?php echo $fecha; ?><?php echo $fuente ? " | Fuente: $fuente" : ""; ?></span>
-            <h1><?php echo $titulo; ?></h1>
-            
-            <div class="reproductor-box">
-                <button class="btn-play" id="btnPlay" onclick="toggleAudio()">▶</button>
-                <div class="reproductor-info" id="infoAudio">Escuchar artículo completo (Audio)</div>
+        <?php if ($fuente_raw !== '' || $fecha_raw !== ''): ?>
+            <div class="pie-foto-izquierda">
+                <?php echo htmlspecialchars($titulo_raw, ENT_QUOTES, 'UTF-8'); ?>
+                <?php echo $fuente_raw !== '' ? ' — ' . htmlspecialchars($fuente_raw, ENT_QUOTES, 'UTF-8') : ''; ?>
             </div>
-
-            <div class="lectura-texto">
-                <?php echo $contenido_completo; ?>
-            </div>
-
-            <div class="acciones-superiores">
-                <button class="btn-compartir" onclick="compartirPaginaConFoto()">🔗 Compartir</button>
-                <a href="https://www.facebook.com/sharer/sharer.php?u=<?php echo urlencode($url_actual); ?>" target="_blank" rel="noopener" class="btn-red-social fb">Facebook</a>
-                <a href="https://twitter.com/intent/tweet?url=<?php echo urlencode($url_actual); ?>&text=<?php echo urlencode($titulo_raw); ?>" target="_blank" rel="noopener" class="btn-red-social x">X</a>
-                <a href="https://www.tiktok.com/" target="_blank" rel="noopener" class="btn-red-social tiktok" title="Abrir TikTok">TikTok</a>
-            </div>
-
-            <!-- REACCIONES INSTANTÁNEAS (0ms) -->
-            <div class="reacciones-footer">
-                <button class="btn-reaccion" id="btn-like-<?php echo $id; ?>" onclick="reaccionar('<?php echo $id; ?>', 'like')">👍 <span id="likes-<?php echo $id; ?>"><?php echo $likes; ?></span></button>
-                <button class="btn-reaccion" id="btn-sad-<?php echo $id; ?>" onclick="reaccionar('<?php echo $id; ?>', 'sad')">😢 <span id="sads-<?php echo $id; ?>"><?php echo $sads; ?></span></button>
-            </div>
-        </div>
-    </div>
-
-    <div class="seccion-comentarios">
-        <h3>Comentarios de la Comunidad</h3>
-        
-        <form method="POST" class="form-comentario">
-            <input type="hidden" name="nuevo_comentario" value="1">
-            <input type="text" name="autor" class="input-comentario" placeholder="Tu Nombre o Seudónimo" required>
-            <textarea name="comentario" class="input-comentario" rows="3" placeholder="Escribe tu comentario u opinión..." required></textarea>
-            <button type="submit" class="btn-enviar">Publicar Comentario</button>
-        </form>
-
-        <?php if (empty($comentarios)): ?>
-            <p style="color: #777; font-style: italic;">Sé el primero en comentar este artículo.</p>
-        <?php else: ?>
-            <?php foreach ($comentarios as $com): ?>
-                <div class="comentario-item">
-                    <div class="comentario-autor"><?php echo htmlspecialchars($com['autor']); ?></div>
-                    <div class="comentario-fecha"><?php echo htmlspecialchars($com['fecha']); ?></div>
-                    <p class="comentario-texto"><?php echo nl2br(htmlspecialchars($com['texto'])); ?></p>
-                </div>
-            <?php endforeach; ?>
         <?php endif; ?>
+    </aside>
+
+    <!-- COSTADO DERECHO EN PC: LECTURA LIMPIA, HERRAMIENTAS, REACCIONES Y COMENTARIOS -->
+    <div class="columna-texto-derecha">
+        <article>
+            <div class="meta-fila">
+                <span class="badge-cat"><?php echo htmlspecialchars($categoria_raw, ENT_QUOTES, 'UTF-8'); ?></span>
+                <span class="meta-texto">
+                    <?php echo htmlspecialchars($fecha_raw, ENT_QUOTES, 'UTF-8'); ?>
+                    <?php echo $fuente_raw !== '' ? ' | ' . htmlspecialchars($fuente_raw, ENT_QUOTES, 'UTF-8') : ''; ?>
+                </span>
+            </div>
+
+            <h1 class="titulo-articulo" id="tituloArticulo"><?php echo htmlspecialchars($titulo_raw, ENT_QUOTES, 'UTF-8'); ?></h1>
+
+            <?php if ($subtitulo_raw !== ''): ?>
+                <p class="subtitulo-articulo"><?php echo htmlspecialchars($subtitulo_raw, ENT_QUOTES, 'UTF-8'); ?></p>
+            <?php endif; ?>
+
+            <div class="herramientas-lectura">
+                <button type="button" class="btn-voz" id="btnVozArticulo" onclick="toggleVozArticulo()">▶ Escuchar artículo</button>
+                <button type="button" class="btn-compartir-unico" onclick="abrirModalCompartirArticulo()">🔗 Compartir</button>
+            </div>
+
+            <?php if ($resumen_raw !== '' && $contenido_raw !== ''): ?>
+                <div class="resumen-destacado">
+                    <?php echo htmlspecialchars($resumen_raw, ENT_QUOTES, 'UTF-8'); ?>
+                </div>
+            <?php endif; ?>
+
+            <div class="cuerpo-lectura" id="cuerpoLectura">
+                <?php
+                $parrafos = preg_split('/\r?\n+/', $texto_lectura);
+                foreach ($parrafos as $p) {
+                    $p_limpio = trim($p);
+                    if ($p_limpio !== '') {
+                        echo '<p>' . htmlspecialchars($p_limpio, ENT_QUOTES, 'UTF-8') . '</p>' . "\n";
+                    }
+                }
+                ?>
+            </div>
+        </article>
+
+        <section class="seccion-reacciones">
+            <span class="label-reac">¿Qué te pareció esta publicación?</span>
+            <div class="botones-reaccion-grupo">
+                <button type="button" class="btn-reaccion" id="btn-like-<?php echo htmlspecialchars(strval($articulo['id']), ENT_QUOTES, 'UTF-8'); ?>" onclick="reaccionar('<?php echo htmlspecialchars(strval($articulo['id']), ENT_QUOTES, 'UTF-8'); ?>', 'like')">
+                    <span class="emoji-reac">👍</span> <span id="likes-<?php echo htmlspecialchars(strval($articulo['id']), ENT_QUOTES, 'UTF-8'); ?>"><?php echo $likes; ?></span>
+                </button>
+                <button type="button" class="btn-reaccion" id="btn-sad-<?php echo htmlspecialchars(strval($articulo['id']), ENT_QUOTES, 'UTF-8'); ?>" onclick="reaccionar('<?php echo htmlspecialchars(strval($articulo['id']), ENT_QUOTES, 'UTF-8'); ?>', 'sad')">
+                    <span class="emoji-reac">😢</span> <span id="sads-<?php echo htmlspecialchars(strval($articulo['id']), ENT_QUOTES, 'UTF-8'); ?>"><?php echo $sads; ?></span>
+                </button>
+            </div>
+        </section>
+
+        <section class="seccion-comentarios">
+            <h3>Comentarios (<span id="contadorComentarios"><?php echo count($comentarios); ?></span>)</h3>
+
+            <form class="form-comentario" onsubmit="enviarComentario(event)">
+                <input type="text" id="autorComentario" class="input-com" placeholder="Tu nombre (opcional)" maxlength="60">
+                <textarea id="textoComentario" class="input-com" rows="3" placeholder="Escribe tu comentario sobre esta noticia..." maxlength="1000" required></textarea>
+                <button type="submit" class="btn-enviar-com">Publicar comentario</button>
+            </form>
+
+            <div class="lista-comentarios" id="listaComentarios">
+                <?php if (empty($comentarios)): ?>
+                    <p id="sinComentariosMsg" style="color: #888; font-size: 14px;">Sé el primero en comentar este artículo.</p>
+                <?php else: ?>
+                    <?php foreach (array_reverse($comentarios) as $com): ?>
+                        <div class="item-comentario">
+                            <div class="item-comentario-head">
+                                <span><?php echo htmlspecialchars($com['autor'] ?? 'Lector', ENT_QUOTES, 'UTF-8'); ?></span>
+                                <span class="fecha-com"><?php echo htmlspecialchars($com['fecha'] ?? '', ENT_QUOTES, 'UTF-8'); ?></span>
+                            </div>
+                            <p><?php echo htmlspecialchars($com['texto'] ?? '', ENT_QUOTES, 'UTF-8'); ?></p>
+                        </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+        </section>
+    </div>
+</main>
+
+<!-- MODAL UNIFICADO DE COMPARTIR -->
+<div id="modalCompartirArticulo" class="modal-compartir-overlay" onclick="if(event.target===this) cerrarModalCompartirArticulo()">
+    <div class="modal-compartir-caja">
+        <div class="modal-compartir-header">
+            <h4>Compartir Artículo</h4>
+            <button type="button" class="btn-cerrar-compartir" onclick="cerrarModalCompartirArticulo()">×</button>
+        </div>
+
+        <div class="tarjeta-previa-compartir">
+            <img src="<?php echo htmlspecialchars($img_rel, ENT_QUOTES, 'UTF-8'); ?>" alt="Vista previa" onerror="this.onerror=null; this.src='images/default.jpg';">
+            <div class="tarjeta-previa-info">
+                <strong><?php echo htmlspecialchars($titulo_raw, ENT_QUOTES, 'UTF-8'); ?></strong>
+                <p><?php echo htmlspecialchars($og_desc_200, ENT_QUOTES, 'UTF-8'); ?></p>
+            </div>
+        </div>
+
+        <div class="grid-redes-compartir">
+            <a id="artShareWA" href="#" target="_blank" rel="noopener" class="btn-red-opcion wa">WhatsApp</a>
+            <a id="artShareFB" href="#" target="_blank" rel="noopener" class="btn-red-opcion fb">Facebook</a>
+            <button type="button" onclick="compartirInstagramArt()" class="btn-red-opcion ig">Instagram</button>
+            <a id="artShareTG" href="#" target="_blank" rel="noopener" class="btn-red-opcion tg">Telegram</a>
+            <a id="artShareX" href="#" target="_blank" rel="noopener" class="btn-red-opcion xx">X (Twitter)</a>
+            <button type="button" onclick="compartirTikTokArt()" class="btn-red-opcion tk">TikTok</button>
+            <a id="artShareLI" href="#" target="_blank" rel="noopener" class="btn-red-opcion li">LinkedIn</a>
+            <a id="artShareEmail" href="#" class="btn-red-opcion em">Correo</a>
+            <button type="button" onclick="compartirPaginaConFoto()" class="btn-red-opcion nativo">📲 Compartir desde el dispositivo (foto miniatura + texto)</button>
+            <button type="button" onclick="copiarArticuloCompleto()" class="btn-red-opcion copiar">📋 Copiar título, resumen y enlace</button>
+        </div>
     </div>
 </div>
 
 <div id="toast-notificacion"></div>
 
 <script>
-    const datosCompartir = {
-        titulo: <?php echo json_encode($titulo_raw, JSON_UNESCAPED_UNICODE); ?>,
-        resumen: <?php echo json_encode(mb_substr($resumen_raw, 0, 220), JSON_UNESCAPED_UNICODE); ?>,
-        url: <?php echo json_encode($url_actual, JSON_UNESCAPED_UNICODE); ?>
-    };
+    const ARTICULO_ID = <?php echo json_encode(strval($articulo['id'])); ?>;
+    const ARTICULO_URL = <?php echo json_encode($url_canonica); ?>;
+    const ARTICULO_TITULO = <?php echo json_encode($titulo_raw); ?>;
+    const ARTICULO_RESUMEN = <?php echo json_encode(mb_substr($og_desc_200, 0, 200, 'UTF-8')); ?>;
 
     let toastTimer = null;
     function mostrarToast(mensaje) {
@@ -380,23 +880,23 @@ $comentarios = $articulo['comentarios'] ?? [];
         }, 2800);
     }
 
-    document.addEventListener("DOMContentLoaded", function() {
-        let idArt = <?php echo json_encode(strval($id)); ?>;
-        let estado = localStorage.getItem(`reaccion_${idArt}`);
+    document.addEventListener('DOMContentLoaded', () => {
+        const estado = localStorage.getItem('reaccion_' + ARTICULO_ID);
         if (estado) {
-            let btn = document.getElementById(`btn-${estado}-${idArt}`);
+            const btn = document.getElementById('btn-' + estado + '-' + ARTICULO_ID);
             if (btn) btn.classList.add('seleccionado');
         }
+
+        const textoWA = `*${ARTICULO_TITULO}*\n${ARTICULO_RESUMEN}\n${ARTICULO_URL}`;
+        document.getElementById('artShareWA').href = `https://api.whatsapp.com/send?text=${encodeURIComponent(textoWA)}`;
+        document.getElementById('artShareFB').href = `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(ARTICULO_URL)}`;
+        document.getElementById('artShareTG').href = `https://t.me/share/url?url=${encodeURIComponent(ARTICULO_URL)}&text=${encodeURIComponent(ARTICULO_TITULO + ' — ' + ARTICULO_RESUMEN)}`;
+        document.getElementById('artShareX').href = `https://twitter.com/intent/tweet?url=${encodeURIComponent(ARTICULO_URL)}&text=${encodeURIComponent(ARTICULO_TITULO)}`;
+        document.getElementById('artShareLI').href = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(ARTICULO_URL)}`;
+        document.getElementById('artShareEmail').href = `mailto:?subject=${encodeURIComponent(ARTICULO_TITULO)}&body=${encodeURIComponent(textoWA)}`;
     });
 
-    function togglePin() {
-        const container = document.getElementById('heroContainer');
-        const btn = document.getElementById('btnPin');
-        container.classList.toggle('pinned');
-        btn.classList.toggle('activo');
-    }
-
-    // REACCIONES INSTANTÁNEAS EN 0 MILISEGUNDOS (OPTIMISTIC UI)
+    // Reacciones instantáneas 0ms
     function reaccionar(id, tipo) {
         const claveLocal = `reaccion_${id}`;
         const previo = localStorage.getItem(claveLocal) || '';
@@ -435,67 +935,142 @@ $comentarios = $articulo['comentarios'] ?? [];
             localStorage.removeItem(claveLocal);
         }
 
-        fetch(`articulo.php?id=${encodeURIComponent(id)}&ajax_reaccionar=1&tipo=${encodeURIComponent(tipo)}&previo=${encodeURIComponent(previo)}`, {
+        fetch(`articulo.php?ajax_reaccionar=1&id=${encodeURIComponent(id)}&tipo=${encodeURIComponent(tipo)}&previo=${encodeURIComponent(previo)}`, {
             cache: 'no-store'
         }).catch(() => {});
     }
 
-    const textoParaAudio = <?php echo json_encode(strip_tags($titulo_raw . ". " . $texto_plano_voz), JSON_UNESCAPED_UNICODE); ?>;
+    // Lectura en voz alta
     let synth = window.speechSynthesis;
-    let utterance = null;
-    let reproduciendo = false;
+    let leyendoVoz = false;
 
-    function toggleAudio() {
-        const btnPlay = document.getElementById('btnPlay');
-        const infoAudio = document.getElementById('infoAudio');
-
+    function toggleVozArticulo() {
         if (!synth) {
-            mostrarToast("Tu navegador no soporta reproducción de voz.");
+            mostrarToast("Tu navegador no soporta lectura de voz.");
             return;
         }
-
-        if (reproduciendo) {
+        const btn = document.getElementById('btnVozArticulo');
+        if (leyendoVoz) {
             synth.cancel();
-            reproduciendo = false;
-            btnPlay.textContent = "▶";
-            infoAudio.textContent = "Escuchar artículo completo (Audio)";
-        } else {
-            utterance = new SpeechSynthesisUtterance(textoParaAudio);
-            utterance.lang = 'es-ES';
-            utterance.rate = 1.0;
+            leyendoVoz = false;
+            btn.textContent = "▶ Escuchar artículo";
+            return;
+        }
+        const titulo = document.getElementById('tituloArticulo').innerText;
+        const cuerpo = document.getElementById('cuerpoLectura').innerText;
+        const utter = new SpeechSynthesisUtterance(titulo + ". " + cuerpo);
+        utter.lang = 'es-ES';
+        utter.rate = 1.0;
+        utter.onend = () => {
+            leyendoVoz = false;
+            btn.textContent = "▶ Escuchar artículo";
+        };
+        synth.speak(utter);
+        leyendoVoz = true;
+        btn.textContent = "❚❚ Detener lectura";
+    }
 
-            utterance.onend = function() {
-                reproduciendo = false;
-                btnPlay.textContent = "▶";
-                infoAudio.textContent = "Escuchar artículo completo (Audio)";
-            };
+    window.addEventListener('beforeunload', () => {
+        if (synth && leyendoVoz) synth.cancel();
+    });
 
-            synth.speak(utterance);
-            reproduciendo = true;
-            btnPlay.textContent = "❚❚";
-            infoAudio.textContent = "Reproduciendo audio...";
+    // Comentarios AJAX
+    function escaparHTML(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+
+    function enviarComentario(e) {
+        e.preventDefault();
+        const autorInput = document.getElementById('autorComentario');
+        const textoInput = document.getElementById('textoComentario');
+        const texto = textoInput.value.trim();
+        if (!texto) return;
+
+        const formData = new URLSearchParams();
+        formData.append('ajax_comentar', '1');
+        formData.append('id', ARTICULO_ID);
+        formData.append('autor', autorInput.value.trim() || 'Lector');
+        formData.append('comentario', texto);
+
+        fetch('articulo.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: formData.toString()
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success' && data.comentario) {
+                const sinMsg = document.getElementById('sinComentariosMsg');
+                if (sinMsg) sinMsg.remove();
+
+                const lista = document.getElementById('listaComentarios');
+                const item = document.createElement('div');
+                item.className = 'item-comentario';
+                item.innerHTML = `
+                    <div class="item-comentario-head">
+                        <span>${escaparHTML(data.comentario.autor)}</span>
+                        <span class="fecha-com">${escaparHTML(data.comentario.fecha)}</span>
+                    </div>
+                    <p>${escaparHTML(data.comentario.texto)}</p>
+                `;
+                lista.prepend(item);
+
+                const contador = document.getElementById('contadorComentarios');
+                contador.textContent = (parseInt(contador.textContent, 10) || 0) + 1;
+                textoInput.value = '';
+                mostrarToast("💬 Comentario publicado.");
+            }
+        })
+        .catch(() => mostrarToast("No se pudo publicar el comentario."));
+    }
+
+    function abrirModalCompartirArticulo() {
+        document.getElementById('modalCompartirArticulo').classList.add('abierto');
+    }
+
+    function cerrarModalCompartirArticulo() {
+        document.getElementById('modalCompartirArticulo').classList.remove('abierto');
+    }
+
+    function copiarArticuloCompleto() {
+        const textoFormateado = `*${ARTICULO_TITULO}*\n\n${ARTICULO_RESUMEN}\n\n${ARTICULO_URL}`;
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(textoFormateado).then(() => {
+                mostrarToast("📋 ¡Tarjeta de texto y enlace copiada!");
+            });
         }
     }
 
-    // Convierte la foto ya cargada en pantalla a un archivo JPG de tamaño mediano listo para adjuntar en 0ms
-    function obtenerArchivoDesdeHero() {
+    function compartirInstagramArt() {
+        copiarArticuloCompleto();
+        window.open('https://www.instagram.com/', '_blank', 'noopener');
+    }
+
+    function compartirTikTokArt() {
+        copiarArticuloCompleto();
+        window.open('https://www.tiktok.com/', '_blank', 'noopener');
+    }
+
+    // Miniatura ultra compacta (180px) para que las redes mantengan foto y texto juntos
+    function obtenerArchivoDesdeImgDOM(imgElement) {
         return new Promise((resolve) => {
             try {
-                const imgElement = document.getElementById('heroImagenArticulo');
                 if (!imgElement || !imgElement.complete || imgElement.naturalWidth === 0) {
                     resolve(null);
                     return;
                 }
                 const canvas = document.createElement('canvas');
-                const maxDim = 800;
+                const maxDim = 180;
                 let w = imgElement.naturalWidth;
                 let h = imgElement.naturalHeight;
                 if (w > maxDim || h > maxDim) {
                     if (w > h) {
-                        h = Math.round((h * maxDim) / w);
+                        h = Math.max(1, Math.round((h * maxDim) / w));
                         w = maxDim;
                     } else {
-                        w = Math.round((w * maxDim) / h);
+                        w = Math.max(1, Math.round((w * maxDim) / h));
                         h = maxDim;
                     }
                 }
@@ -505,40 +1080,56 @@ $comentarios = $articulo['comentarios'] ?? [];
                 ctx.drawImage(imgElement, 0, 0, w, h);
                 canvas.toBlob((blob) => {
                     if (blob) {
-                        const archivo = new File([blob], 'noticia_amazonia.jpg', { type: 'image/jpeg' });
-                        resolve(archivo);
+                        resolve(new File([blob], 'noticia_amazonia.jpg', { type: 'image/jpeg' }));
                     } else {
                         resolve(null);
                     }
-                }, 'image/jpeg', 0.85);
+                }, 'image/jpeg', 0.62);
             } catch (e) {
                 resolve(null);
             }
         });
     }
 
-    // COMPARTIR ENLACE LIMPIO PARA TARJETA OPEN GRAPH + RESPALDO DE COPIA CON TÍTULO Y RESUMEN
     async function compartirPaginaConFoto() {
-        const textoFormateado = `*${datosCompartir.titulo}*\n\n${datosCompartir.resumen}\n\n${datosCompartir.url}`;
+        const textoFormateado = `*${ARTICULO_TITULO}*\n\n${ARTICULO_RESUMEN}\n\n${ARTICULO_URL}`;
+        const imgEl = document.getElementById('imgPrincipalArticulo');
 
         if (navigator.share) {
             try {
+                const archivoFoto = await obtenerArchivoDesdeImgDOM(imgEl);
+                if (archivoFoto && navigator.canShare && navigator.canShare({ files: [archivoFoto] })) {
+                    await navigator.share({
+                        files: [archivoFoto],
+                        title: ARTICULO_TITULO,
+                        text: textoFormateado
+                    });
+                    cerrarModalCompartirArticulo();
+                    return;
+                }
+            } catch (err) {
+                if (err.name === 'AbortError') return;
+            }
+
+            try {
                 await navigator.share({
-                    title: datosCompartir.titulo,
-                    url: datosCompartir.url
+                    title: ARTICULO_TITULO,
+                    text: `${ARTICULO_TITULO} — ${ARTICULO_RESUMEN}`,
+                    url: ARTICULO_URL
                 });
+                cerrarModalCompartirArticulo();
                 return;
             } catch (err) {
                 if (err.name === 'AbortError') return;
             }
         }
 
-        if (navigator.clipboard) {
-            navigator.clipboard.writeText(textoFormateado).then(function() {
-                mostrarToast("📋 ¡Copiado con título, resumen y enlace!");
-            });
-        }
+        copiarArticuloCompleto();
     }
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') cerrarModalCompartirArticulo();
+    });
 </script>
 
 </body>
