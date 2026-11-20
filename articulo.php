@@ -107,15 +107,38 @@ if (!$articulo) {
     exit;
 }
 
-$titulo_raw = trim($articulo['titulo'] ?? 'Artículo');
+$titulo_limpio_base = trim($articulo['titulo'] ?? 'Artículo');
+if ($titulo_limpio_base === '') {
+    $titulo_limpio_base = 'Artículo';
+}
+// Evita duplicar "| Portal Amazonía" o "- Portal Amazonía" si ya viene en el título
+$titulo_raw = preg_replace('/\s*[\|\-–—]\s*Portal\s+Amazon[ií]a\s*$/iu', '', $titulo_limpio_base);
+$titulo_raw = trim($titulo_raw) !== '' ? trim($titulo_raw) : $titulo_limpio_base;
+
 $subtitulo_raw = trim($articulo['subtitulo'] ?? '');
 $resumen_raw = trim($articulo['resumen'] ?? '');
 $contenido_raw = trim($articulo['contenido_completo'] ?? '');
 $texto_lectura = ($contenido_raw !== '') ? $contenido_raw : $resumen_raw;
 
-// Limpieza de descripción para meta description y og:description
+// Limpieza de descripción para evitar que repita el título o el nombre del portal al inicio
 $desc_fuente = ($resumen_raw !== '') ? $resumen_raw : $texto_lectura;
 $desc_limpia = trim(preg_replace('/\s+/u', ' ', $desc_fuente));
+
+$titulo_escapado_regex = preg_quote($titulo_raw, '/');
+if ($titulo_escapado_regex !== '') {
+    $desc_limpia = preg_replace('/^' . $titulo_escapado_regex . '\s*[:\.\-–—\|]*\s*/iu', '', $desc_limpia);
+}
+$desc_limpia = preg_replace('/^Portal\s+Amazon[ií]a\s*[:\.\-–—\|]*\s*/iu', '', trim($desc_limpia));
+$desc_limpia = trim($desc_limpia);
+
+if ($desc_limpia === '' && $contenido_raw !== '' && $resumen_raw !== '') {
+    $fallback_cuerpo = trim(preg_replace('/\s+/u', ' ', $contenido_raw));
+    if ($titulo_escapado_regex !== '') {
+        $fallback_cuerpo = preg_replace('/^' . $titulo_escapado_regex . '\s*[:\.\-–—\|]*\s*/iu', '', $fallback_cuerpo);
+    }
+    $desc_limpia = trim($fallback_cuerpo);
+}
+
 $meta_desc_180 = mb_substr($desc_limpia, 0, 180, 'UTF-8');
 $og_desc_200   = mb_substr($desc_limpia, 0, 200, 'UTF-8');
 
